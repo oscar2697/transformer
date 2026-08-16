@@ -1,0 +1,16 @@
+# Core
+torch>=2.0
+
+# Data / tokenization (only standard library + requests are required for data)
+requests>=2.30
+
+# Training & evaluation
+numpy>=1.24
+tqdm>=4.66
+sacrebleu>=2.4
+
+# Optional but recommended
+sentencepiece>=0.2
+
+# Tests
+pytest>=7.0

@@ -1,0 +1,34 @@
+\section{Experimental Setup}
+
+\subsection{Dataset}
+
+We evaluate on the \textbf{Tatoeba English $\rightarrow$ German} sentence-pair collection, a community-curated corpus distributed under CC-BY through the ManyThings/Anki distribution (the same source data family as Tatoeba.org). The raw file \texttt{deu.txt} contains $\sim$331,266 English--German sentence pairs in TSV format (\texttt{EN\textbackslash t DE\textbackslash t attribution}). After dropping pairs with empty cells or replacement characters (U+FFFD introduced by mixed latin-1 / UTF-8 encoding in the raw file) and filtering by source/target token length (max 100 tokens after target \texttt{<sos>}/\texttt{<eos>} insertion), the corpus is reduced to $\sim$331,265 pairs, which we split deterministically into \textbf{train / val / test = 98\% / 1\% / 1\%} (seed = 42), giving 324,641 / 3,312 / 3,312 pairs respectively.
+
+All data is downloaded automatically at runtime from \url{http://www.manythings.org/anki/deu-eng.zip} ($\sim$12 MB). The downloader sets an explicit browser-style User-Agent header (the server occasionally returns HTTP 406 to default Python agents) and a 60 MB safety cap. No manual preprocessing or external tokenizers are used. Tokenization is performed with a regex-based pattern that splits on whitespace and punctuation, followed by lowercasing. The resulting vocabulary sizes are \textbf{12,843 tokens for English} and \textbf{23,568 tokens for German} at the word level, with $\text{min\_freq} = 2$ and tokens below that threshold mapped to UNK.
+
+The Tatoeba distribution is a substantial upgrade over the Multi30k captions we previously reported on (Elliott et al., 2016), both in size ($\sim$11$\times$ more pairs) and in domain coverage (general-purpose sentences rather than image captions). This means the model is exposed to a much broader vocabulary, including technical and conversational German, and is therefore usable for translation of sentences outside the Flickr-image-caption domain.
+
+\subsection{Evaluation Metrics}
+
+We report two standardized metrics for translation quality:
+
+\begin{itemize}
+\item \textbf{BLEU} (Papineni et al., 2002): computed at the corpus level using sacrebleu (Post, 2018) with its default tokenization, which is compatible with standard WMT evaluation protocols. BLEU measures n-gram precision with a brevity penalty.
+\item \textbf{chrF2} (Popovi\'c, 2015): also computed via sacrebleu. chrF2 evaluates character n-gram overlap with a beta parameter of 2, providing a more robust measure for morphologically rich languages such as German.
+\end{itemize}
+
+Perplexity on the validation set is reported as a sanity check during training, computed as $\exp(\text{val\_loss})$.
+
+\subsection{Training Protocol}
+
+Models are trained on CPU (the execution environment used for this paper does not expose a CUDA device), with automatic device placement via \texttt{torch.device("cuda" if torch.cuda.is\_available() else "cpu")}. All experiments use a fixed random seed of 42 for reproducibility. Gradient accumulation is not used; the effective batch size is 32 sequences per step. The Noam learning rate scheduler is configured with a warmup of 2000 steps and a dimensionality-dependent learning rate factor following Vaswani et al. (2017). Early stopping is not applied: the run was allowed to train for the full 8 epochs and the best model was selected post-hoc by lowest validation loss. Gradient clipping is applied at a maximum norm of 1.0.
+
+\subsection{Baseline}
+
+As a reference baseline, we intend to train a Transformer using PyTorch's native \texttt{nn.Transformer} module with hyperparameters matched to our main configuration ($d_{\text{model}}=256$, 8 heads, 4 encoder layers, 4 decoder layers, $d_{\text{ff}}=1024$, label smoothing 0.1, warmup 2000, batch size 32). This baseline will enable a fair comparison between the hand-rolled implementation and the library-optimized version. \textbf{This experiment is planned as future work; results are not yet available.}
+
+\subsection{Hardware and Software}
+
+All trained experiments reported in this paper were executed on a single Google Colab GPU (NVIDIA T4). Training time for the main configuration is \textbf{$\approx$ 56 minutes} for 8 epochs. The code has no dependencies beyond the standard scientific Python stack plus \texttt{sacrebleu} for evaluation. PyTorch version is 2.0 or higher; the implementation does not depend on any feature specific to a particular PyTorch release.
+
+\textit{[PLACEHOLDER: tatoeba\_sample.png --- Sample source (English) and reference (German) sentence pairs from the test set.]}

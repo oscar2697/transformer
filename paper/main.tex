@@ -1,0 +1,159 @@
+\documentclass[10pt]{article}
+
+% NeurIPS-style page geometry
+\usepackage[letterpaper,margin=1.5in]{geometry}
+
+% Core packages
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{textcomp}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{microtype}
+
+% Listings style for Python pseudocode
+\definecolor{codebg}{rgb}{0.97,0.97,0.97}
+\definecolor{codekw}{rgb}{0.10,0.10,0.55}
+\definecolor{codeid}{rgb}{0.00,0.30,0.30}
+\lstdefinestyle{paperpython}{
+  language=Python,
+  backgroundcolor=\color{codebg},
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{codekw}\bfseries,
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{codeid},
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  framerule=0.4pt,
+  framesep=4pt,
+  xleftmargin=6pt,
+  xrightmargin=6pt,
+  aboveskip=6pt,
+  belowskip=6pt,
+}
+\lstset{style=paperpython}
+
+% Title block
+\title{\vspace{-1.0cm}\textbf{A Hand-Rolled PyTorch Implementation of the Transformer \\[0.2em]
+\large Validated on Tatoeba English-to-German with an Interpretability Analysis}}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\input{abstract}
+
+\input{01_introduction}
+
+\input{02_background}
+
+\input{03_implementation}
+
+\input{04_experimental_setup}
+
+\input{05_results}
+
+\input{06_ablations}
+
+\input{07_discussion}
+
+\input{08_conclusion}
+
+\bibliographystyle{plain}
+\begin{thebibliography}{99}
+
+\bibitem{vaswani2017}
+A.~Vaswani, N.~Shazeer, N.~Parmar, J.~Uszkoreit, L.~Jones, A.~N.~Gomez, \L.~Kaiser, and I.~Polosukhin.
+\newblock Attention is all you need.
+\newblock In \emph{Advances in Neural Information Processing Systems}, volume~30, 2017.
+
+\bibitem{elliott2016}
+D.~Elliott, S.~Frank, K.~Sima'an, and L.~Specia.
+\newblock Multi30k: Multilingual English-German image descriptions.
+\newblock In \emph{Proceedings of the 5th Workshop on Vision and Language}, pages 70--74, 2016.
+
+\bibitem{papineni2002}
+K.~Papineni, S.~Roukos, T.~Ward, and W.-J.~Zhu.
+\newblock BLEU: a method for automatic evaluation of machine translation.
+\newblock In \emph{Proceedings of the 40th Annual Meeting of the Association for Computational Linguistics}, pages 311--318, 2002.
+
+\bibitem{popovic2015}
+M.~Popovi\'c.
+\newblock chrF: character n-gram F-score for automatic MT evaluation.
+\newblock In \emph{Proceedings of the 10th Workshop on Statistical Machine Translation}, pages 392--395, 2015.
+
+\bibitem{post2018}
+M.~Post.
+\newblock A call for clarity in reporting BLEU scores.
+\newblock In \emph{Proceedings of the 3rd Conference on Machine Translation}, pages 186--191, 2018.
+
+\bibitem{szegedy2016}
+C.~Szegedy, V.~Vanhoucke, S.~Ioffe, J.~Shlens, and Z.~Wojna.
+\newblock Rethinking the inception architecture for computer vision.
+\newblock In \emph{Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition}, pages 2818--2826, 2016.
+
+\bibitem{popel2018}
+M.~Popel and O.~Bojar.
+\newblock Training tips for the Transformer model.
+\newblock \emph{The Prague Bulletin of Mathematical Linguistics}, 110:63--87, 2018.
+
+\bibitem{ott2018}
+M.~Ott, S.~Edunov, D.~Grangier, and M.~Auli.
+\newblock Scaling neural machine translation.
+\newblock In \emph{Proceedings of the 3rd Conference on Machine Translation}, pages 1--9, 2018.
+
+\bibitem{sennrich2016}
+R.~Sennrich, B.~Haddow, and A.~Birch.
+\newblock Neural machine translation of rare words with subword units.
+\newblock In \emph{Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics}, pages 1715--1725, 2016.
+
+\bibitem{kudo2018}
+T.~Kudo and J.~Richardson.
+\newblock SentencePiece: a simple and language independent subword tokenizer and detokenizer for neural text processing.
+\newblock In \emph{Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing}, pages 66--71, 2018.
+
+\bibitem{devlin2019}
+J.~Devlin, M.-W.~Chang, K.~Lee, and K.~Toutanova.
+\newblock BERT: pre-training of deep bidirectional Transformers for language understanding.
+\newblock In \emph{Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics}, pages 4171--4186, 2019.
+
+\bibitem{bojar2017}
+O.~Bojar, R.~Chatterjee, C.~Federmann, Y.~Graham, B.~Haddow, M.~Huck, et~al.
+\newblock Findings of the 2017 Conference on Machine Translation (WMT17).
+\newblock In \emph{Proceedings of the 2nd Conference on Machine Translation}, pages 169--214, 2017.
+
+\bibitem{press2018}
+O.~Press and N.~A.~Smith.
+\newblock You may not need attention.
+\newblock \emph{arXiv preprint} arXiv:1810.04805, 2018.
+
+\bibitem{child2019}
+R.~Child, S.~Gray, A.~Radford, and I.~Sutskever.
+\newblock Generating long sequences with sparse Transformers.
+\newblock \emph{arXiv preprint} arXiv:1904.10509, 2019.
+
+\bibitem{kitaev2020}
+N.~Kitaev, \L.~Kaiser, and A.~Levskaya.
+\newblock Reformer: the efficient Transformer.
+\newblock In \emph{International Conference on Learning Representations}, 2020.
+
+\bibitem{dai2019}
+Z.~Dai, Z.~Yang, Y.~Yang, J.~Carbonell, Q.~V.~Le, and R.~Salakhutdinov.
+\newblock Transformer-XL: attentive language models beyond a fixed-length context.
+\newblock In \emph{Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics}, pages 2978--2988, 2019.
+
+\bibitem{xiao2024}
+G.~Xiao, Y.~Tian, B.~Chen, S.~Han, and M.~Lewis.
+\newblock Efficient streaming language models with attention sinks.
+\newblock In \emph{International Conference on Learning Representations}, 2024.
+
+\end{thebibliography}
+
+\end{document}

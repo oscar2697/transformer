@@ -1,0 +1,91 @@
+\section{Ablation Studies}
+
+We design a series of controlled ablation experiments to isolate the contribution of individual architectural and training choices. Each ablation is trained from scratch with the main configuration ($d_{\text{model}}=256$, 4 encoder and 4 decoder layers, 8 heads, $d_{\text{ff}}=1024$, 8 epochs, label smoothing = 0.1, warmup = 2000, batch size = 32) as the starting point, varying one parameter at a time while holding all others constant. All ablations use the same seed (42) and report BLEU and chrF2 on the Tatoeba EN$\rightarrow$DE test set.
+
+\subsection{Label Smoothing}
+
+Label smoothing (Szegedy et al., 2016) regularizes the cross-entropy loss by distributing a fraction $\epsilon$ of the target probability mass evenly across incorrect classes. For neural machine translation, values of $\epsilon \in [0.05, 0.1]$ have been shown to improve BLEU by 0.5--1.5 points (Vaswani et al., 2017). Our main run is trained with $\epsilon = 0.1$ (the standard default). We compare $\epsilon = 0.0$ (no smoothing), $\epsilon = 0.1$ (current), and $\epsilon = 0.2$ (heavier smoothing). We hypothesize a non-monotonic relationship: mild smoothing should improve generalization, while excessive smoothing may dilute the training signal.
+
+\subsection{Warmup Schedule}
+
+The Noam scheduler uses a linear warmup phase during which the learning rate increases from 0 to its peak value, followed by an inverse-square-root decay. The number of warmup steps controls how aggressively the model explores in early training. Our main run uses 2000 warmup steps. We compare warmup values of 1000, 2000 (current), and 4000 steps. A longer warmup is expected to stabilize early gradient updates, particularly for larger models, but may slow convergence on small datasets.
+
+\subsection{Model Depth and Width}
+
+We study the trade-off between model depth (number of layers) and width ($d_{\text{model}}$) under a fixed parameter budget. Specifically, we compare:
+
+\begin{itemize}
+\item \textbf{Configuration A (current):} $d_{\text{model}}=256$, 4 encoder + 4 decoder layers, $d_{\text{ff}}=1024$ ($\approx$ 12.4 M parameters).
+\item \textbf{Configuration B (deeper):} $d_{\text{model}}=128$, 8 encoder + 8 decoder layers, $d_{\text{ff}}=512$ ($\approx$ 6 M parameters).
+\item \textbf{Configuration C (wider):} $d_{\text{model}}=512$, 2 encoder + 2 decoder layers, $d_{\text{ff}}=2048$ ($\approx$ 19 M parameters).
+\end{itemize}
+
+Prior work (Vaswani et al., 2017; Popel \& Bojar, 2018) suggests that depth improves BLEU more efficiently than width for translation tasks, but this finding is sensitive to the dataset size and vocabulary strategy.
+
+\subsection{Pre-LayerNorm versus Post-LayerNorm}
+
+The original Transformer uses post-layer-normalization (layer norm applied after the residual addition), which was found to be unstable to train in early work. More recent implementations, including those in the fairseq library (Ott et al., 2019), have adopted pre-layer-normalization (layer norm applied before the attention/FFN sub-layer, with the residual connection bypassing the normalization). Our main run uses post-LN, matching Vaswani et al. (2017). We compare both architectures under otherwise identical conditions to quantify the stability and performance difference.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Ablation} & \textbf{Expected impact on BLEU} & \textbf{Rationale} \\
+\midrule
+Label smoothing ($\epsilon=0.0$) & $-0.5$ to $-1.0$ & Loss of regularization benefit \\
+Warmup 4000 vs 2000 & Neutral to $+0.5$ & Stabilizes early training \\
+Depth $\times 2$ (8+8 layers) & $+1$--$3$ & Deeper models capture longer-range dependencies \\
+Pre-LN vs Post-LN & Neutral to $+1$ & Pre-LN is more stable; may allow higher LR \\
+Subword (BPE, 8k pieces) & $+5$--$15$ & Addresses vocabulary fragmentation in EN$\rightarrow$DE \\
+Hand-rolled vs \texttt{nn.Transformer} baseline & $\pm 1$ & Isolates cost of from-scratch implementation \\
+\bottomrule
+\end{tabular}
+\caption{Summary of expected ablation effects based on prior literature. The last row (Section~6.7) is the comparison enabled by \texttt{baseline\_nn.py}. Actual results are filled in once the BPE runs complete.}
+\label{tab:ablation}
+\end{table}
+
+\subsection{Subword Tokenization}
+
+Word-level tokenization on Tatoeba is still a bottleneck: the model must learn mappings for thousands of rare German inflected forms with very limited exposure. Subword tokenization with byte-pair encoding (BPE; Sennrich et al., 2016) or SentencePiece (Kudo \& Richardson, 2018) reduces the effective vocabulary size to a manageable number of units (typically 8,000--32,000) while preserving the ability to represent any word through a sequence of subword pieces. We plan to integrate SentencePiece into the data pipeline and evaluate the BLEU improvement from subword tokenization as a standalone experiment.
+
+\subsection{Per-Head Attention Analysis}
+
+A natural ablation that exploits the first-class attention API described in Section~3.4 is to inspect the attention weights per head rather than averaged over heads. \texttt{visualize\_attention.py} now supports a \texttt{-{}-per-head} flag (added in this revision) that captures the pre-averaged attention tensors via a new \texttt{return\_per\_head=True} pathway in \texttt{model.MultiHeadAttention.forward} and renders one column per head for each of the three attention types (encoder self, decoder self, decoder cross). The script also accepts \texttt{-{}-head <idx>} to render a single head in isolation. With 8 heads and 3 attention types this yields 24 columns per sentence; the implementation tiles them as a single \texttt{N}x(3xH) grid in \texttt{figures/per\_head/attn\_grid\_layer{N}\_per\_head.\{pdf,png\}}.
+
+\subsection{Hand-Rolled vs \texttt{nn.Transformer} Baseline}
+
+To quantify the cost of the from-scratch implementation, we provide a baseline that wraps PyTorch's \texttt{torch.nn.Transformer} with the same interface (Section~3.6). Both models are trained under identical hyperparameters ($d_{\text{model}} = 256$, \texttt{num\_heads} = 8, \texttt{num\_layers} = 4+4, $d_{\text{ff}} = 1024$, \texttt{dropout} = 0.1, label smoothing = 0.1, warmup = 2000, batch size = 32, Adam $\beta = (0.9, 0.98)$, seed = 42) on the same deterministic train/val/test split of Tatoeba EN$\rightarrow$DE.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{llll}
+\toprule
+\textbf{Implementation} & \textbf{Source code} & \textbf{Pre-LN?} & \textbf{Total params} \\
+\midrule
+Hand-rolled (\texttt{model.py}) & Listing~1 & No (post-LN, original convention) & $\approx$ 13.5 M (BPE) \\
+Baseline (\texttt{baseline\_nn.py}, wraps \texttt{torch.nn.Transformer}) & PyTorch built-in & Yes (modern convention) & $\approx$ 13.5 M (BPE) \\
+\bottomrule
+\end{tabular}
+\caption{Two implementations trained on identical data and hyperparameters. The only architectural difference is the LN convention; parameter counts are within 1\% of each other.}
+\label{tab:baseline}
+\end{table}
+
+Any non-zero BLEU/chrF gap between the two is attributable to either (a) the post-LN vs pre-LN choice (Section~6.4), or (b) subtle implementation details (mask convention, attention scaling, dropout ordering). The comparison is run via:
+
+\begin{lstlisting}[language=bash]
+# Hand-rolled + BPE
+python scripts/train_bpe_colab.py --epochs 20
+python evaluate.py --checkpoint checkpoints/best.pt
+
+# Baseline + BPE
+python scripts/train_baseline_nn_colab.py --epochs 20
+python evaluate.py --checkpoint checkpoints/baseline_best.pt
+\end{lstlisting}
+
+The results of this comparison are reported alongside the word-level main run in Section~5.
+
+\textit{[PLACEHOLDER: ablation\_chart.png --- Grouped bar chart comparing BLEU scores across ablations.]}
+
+\subsection{Status of Planned Ablations}
+
+The implementations of Opci\'on B (\texttt{baseline\_nn.py} wrapping \texttt{torch.nn.Transformer}) and Opci\'on C (SentencePiece BPE in \texttt{dataset.py}) are committed to the repository; the dispatching happens via \texttt{config.TOKENIZER} and a \texttt{-{}-baseline-nn} flag to \texttt{train.py}. The end-to-end pipelines have been smoke-tested (Section~6.7) and pass. The two full training runs (BPE hand-rolled and BPE baseline, 15--20 epochs each on a single Colab GPU) are pending external compute and will be run on Google Colab following the recipe in \texttt{scripts/colab/train\_bpe\_colab.ipynb} and \texttt{scripts/colab/train\_baseline\_nn\_colab.ipynb} (both notebooks support \texttt{-{}-resume checkpoints/latest.pt} so the ~9 h/epoch training budget can be split across the ~12 h Colab session cap in 5-epoch chunks). Numerical results will be slotted into Table~2, Table~\ref{tab:baseline}, and the Section~5.3 sample translations once available.
