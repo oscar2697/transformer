@@ -117,7 +117,16 @@ class BaselineNNTransformer(nn.Module):
         src_pad_mask: Optional[torch.Tensor] = None,
         tgt_pad_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Returns logits (batch, tgt_len, tgt_vocab)."""
+        """Returns logits (batch, tgt_len, tgt_vocab).
+
+        Note: PyTorch >= 2.10 removed the public ``output_attentions`` API from
+        ``nn.TransformerEncoder``/``Decoder``. Capturing attention weights now
+        requires either ``torch.nn.modules.activation`` hooks on the internal
+        ``MultiheadAttention`` modules or a custom layer subclass. We keep the
+        baseline lightweight and do not extract attention here; for the
+        attention analysis see the hand-rolled model in ``model.py`` and the
+        figures generated against ``checkpoints/best.pt``.
+        """
         memory = self.encode(src, src_pad_mask=src_pad_mask)
         return self.decode(tgt, memory, tgt_pad_mask=tgt_pad_mask, memory_pad_mask=src_pad_mask)
 

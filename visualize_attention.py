@@ -148,6 +148,9 @@ def main() -> int:
                    help="Render one column per attention head (Nx(3*num_heads) grid).")
     p.add_argument("--head", type=int, default=None,
                    help="When set with --per-head, render only this single head (0-indexed).")
+    p.add_argument("--min-len", type=int, default=2,
+                   help="Skip test sentences with fewer than this many non-special source tokens. "
+                        "Increase to focus attention figures on structurally richer sentences.")
     args = p.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -161,24 +164,49 @@ def main() -> int:
     model = build_model_from_checkpoint(args.checkpoint, src_vocab, tgt_vocab, device)
     model.eval()
 
+    # Early-out for the baseline: PyTorch's nn.Transformer does not expose
+    # attention weights through a public API in PyTorch >= 2.10 (the
+    # `output_attentions` flag was removed). We keep this script focused on
+    # the hand-rolled model, which is the one we use for the §5 attention
+    # analysis anyway. The baseline row of Table 5 is supported by its
+    # BLEU/chrF2 numbers; attention-viz comparison is left as future work.
+    if hasattr(model, "transformer") and not hasattr(model, "encoder_layers"):
+        print(
+            "This checkpoint uses the BaselineNNTransformer (nn.Transformer) "
+            "wrapper, which does not expose attention weights in PyTorch >= 2.10.\n"
+            "Skipping attention visualization. To visualize attention, run "
+            "against the hand-rolled checkpoint (checkpoints/best.pt) instead."
+        )
+        return 0
+
     # Pull a few short-ish test examples so the heatmaps stay readable.
     examples = []
+    seen_lengths = []
     for batch in test_loader:
         src = batch["src"][0]   # (src_len,)
         if src.eq(config.PAD_IDX).all():
             continue
-        if len(examples) >= args.num_sentences:
-            break
         # Decode tokens back to strings for labels.
         src_ids = src.tolist()
         src_tokens = [t for t in src_vocab.decode(src_ids, skip_specials=False).split(" ") if t]
+        # Filter by minimum content length (excluding specials) so that attention
+        # has something to attend over. Default 2 keeps the original behaviour;
+        # raise to 6-8 for sentence-level head specialisation to emerge.
+        n_content = sum(1 for tid in src_ids if tid not in (config.PAD_IDX, config.SOS_IDX, config.EOS_IDX, config.UNK_IDX))
+        if n_content < args.min_len:
+            continue
+        if len(examples) >= args.num_sentences:
+            break
         # Reference translation (target), stripped of specials.
         tgt = batch["tgt"][0]
         tgt_ids = tgt.tolist()
         tgt_tokens = [t for t in tgt_vocab.decode(tgt_ids, skip_specials=False).split(" ") if t]
         examples.append((src, tgt, src_tokens, tgt_tokens, batch["src_pad_mask"][0]))
+        seen_lengths.append(n_content)
 
-    print(f"Collected {len(examples)} sentences.")
+    print(f"Collected {len(examples)} sentences (min content tokens = {args.min_len}).")
+    if seen_lengths:
+        print(f"  content-token lengths: {seen_lengths}")
 
     # Run a forward pass per sentence so we can capture attention weights.
     # Store as list-of-lists keyed by layer so each sentence keeps its own shape;

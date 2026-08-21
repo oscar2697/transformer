@@ -60,7 +60,7 @@ VAL_INTERVAL = 1000  # Steps between validation runs; 0 = only at end of each ep
 # Tokenization mode:
 #   "word" — regex word-level + word vocab (min_freq-based; default).
 #   "bpe"  — SentencePiece BPE; vocab size fixed by SPM_VOCAB_SIZE.
-TOKENIZER = "word"
+TOKENIZER = "bpe"
 
 # Only used when TOKENIZER == "bpe".
 SPM_VOCAB_SIZE = 8000
