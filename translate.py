@@ -15,7 +15,7 @@ from typing import List
 import torch
 
 import config
-from dataset import Vocab, load_data_dispatched as load_data, tokenize
+from dataset import Vocab, BpeVocab, load_data_dispatched as load_data, tokenize
 from model import Transformer
 from utils import set_seed
 
@@ -72,11 +72,28 @@ def build_model_from_checkpoint(
 
 
 def encode_source(sentences: List[str], src_vocab: Vocab, max_len: int) -> torch.Tensor:
-    """Tokenize, encode, and pad a list of source sentences to (batch, max_src_len)."""
-    token_seqs = [tokenize(s)[: max_len - 2] for s in sentences]  # leave room for SOS/EOS if needed
+    """Encode a list of source sentences to a padded (batch, max_src_len) tensor.
+
+    The encoding path must mirror training exactly:
+
+    - For BPE checkpoints (``src_vocab`` is a ``BpeVocab``), call SentencePiece
+      directly on the raw text. Going through the word-level ``tokenize()``
+      helper and then re-joining with spaces produces a different ID sequence
+      (SPM inserts an extra leading-whitespace piece ``▁`` per word boundary)
+      and the model sees a token distribution it was never trained on.
+    - For word-level checkpoints, keep the original tokenize-then-encode path.
+    - In neither mode do we wrap the source with ``<sos>``/``<eos>``: training
+      feeds the bare source sequence to the encoder (see ``load_data`` and
+      ``_load_data_bpe`` in ``dataset.py``).
+    """
+    is_bpe = isinstance(src_vocab, BpeVocab)
     ids: List[List[int]] = []
-    for toks in token_seqs:
-        ids.append([src_vocab.stoi["<sos>"]] + src_vocab.encode(toks) + [src_vocab.stoi["<eos>"]])
+    for s in sentences:
+        if is_bpe:
+            ids.append(src_vocab.sp.EncodeAsIds(s)[: max_len])
+        else:
+            toks = tokenize(s)[: max_len]
+            ids.append(src_vocab.encode(toks))
     max_src = max(len(x) for x in ids)
     out = torch.full((len(ids), max_src), config.PAD_IDX, dtype=torch.long)
     for i, seq in enumerate(ids):
