@@ -402,3 +402,146 @@ class Transformer(nn.Module):
                 break
 
         return decoded
+
+    @torch.no_grad()
+    def beam_search_decode(
+        self,
+        src: torch.Tensor,                  # (batch, src_len)
+        src_pad_mask: torch.Tensor,         # (batch, src_len) bool, True=pad
+        sos_idx: int,
+        eos_idx: int,
+        max_len: int,
+        beam_size: int = 4,
+        length_penalty_alpha: float = 0.6,
+        repetition_penalty: float = 1.0,
+    ) -> torch.Tensor:
+        """Batched beam-search decoding. Returns (batch, decoded_len).
+
+        For each batch element, maintains `beam_size` candidate hypotheses
+        in parallel and returns the best one (selected with a Wu-style
+        length penalty). beam_size = 1 reduces to greedy decoding
+        behaviour.
+
+        `length_penalty_alpha` follows Wu et al. (2016):
+            lp(y) = (5 + |y|)^alpha / (5 + 1)^alpha
+        Set alpha = 0 to disable length normalisation. The penalty is
+        applied only at the final beam selection.
+
+        `repetition_penalty` applies the same HuggingFace convention as in
+        `greedy_decode` (1.0 disables it).
+        """
+        self.eval()
+        batch_size, src_len = src.shape
+        device = src.device
+        vocab_size = self.tgt_tok_emb.num_embeddings
+
+        # Encode source once (shared across all beams of the same input).
+        src_emb = self.dropout(
+            self.pos_encoder(self.src_tok_emb(src) * math.sqrt(self.d_model))
+        )
+        memory = src_emb
+        for layer in self.encoder_layers:
+            memory = layer(memory, key_padding_mask=src_pad_mask)
+
+        # Expand encoder memory and source pad mask across beam positions.
+        memory_expanded = memory.unsqueeze(1).expand(
+            batch_size, beam_size, src_len, self.d_model
+        ).reshape(batch_size * beam_size, src_len, self.d_model)
+        src_pad_mask_expanded = src_pad_mask.unsqueeze(1).expand(
+            batch_size, beam_size, src_len
+        ).reshape(batch_size * beam_size, src_len)
+
+        # Initialise beam state. Only the first beam of each batch starts
+        # with score 0; the others begin at -inf so the top-k selection at
+        # step 1 picks beam_size distinct first tokens.
+        decoded = torch.full(
+            (batch_size * beam_size, 1), sos_idx, dtype=torch.long, device=device
+        )
+        beam_scores = torch.zeros(batch_size * beam_size, device=device)
+        beam_scores[beam_size::beam_size] = -1e9  # every beam except the first of each group
+        finished = torch.zeros(batch_size * beam_size, dtype=torch.bool, device=device)
+
+        for _ in range(max_len - 1):
+            tgt_pad_mask = decoded.eq(config.PAD_IDX)
+            causal_mask = self.generate_causal_mask(decoded.size(1), device)
+
+            tgt_emb = self.dropout(
+                self.pos_encoder(self.tgt_tok_emb(decoded) * math.sqrt(self.d_model))
+            )
+            output = tgt_emb
+            for layer in self.decoder_layers:
+                output = layer(
+                    output, memory_expanded,
+                    tgt_mask=causal_mask,
+                    tgt_key_padding_mask=tgt_pad_mask,
+                    memory_key_padding_mask=src_pad_mask_expanded,
+                )
+
+            logits = self.fc_out(output[:, -1, :])  # (batch * beam, vocab)
+
+            if repetition_penalty != 1.0:
+                score = torch.gather(logits, 1, decoded)
+                score = torch.where(
+                    score < 0,
+                    score * repetition_penalty,
+                    score / repetition_penalty,
+                )
+                logits.scatter_(1, decoded, score)
+
+            log_probs = torch.log_softmax(logits, dim=-1)  # (batch * beam, vocab)
+
+            # Finished beams stay alive by emitting PAD with zero log-prob
+            # contribution, so their cumulative score doesn't change.
+            if finished.any():
+                log_probs = log_probs.masked_fill(
+                    finished.unsqueeze(-1), -1e9
+                )
+                log_probs[finished, config.PAD_IDX] = 0.0
+
+            # Cumulative log-prob of every (beam, next_token) extension.
+            cumulative = log_probs + beam_scores.unsqueeze(-1)
+            # Reshape to (batch, beam * vocab) and pick top beam_size.
+            cumulative = cumulative.view(batch_size, beam_size * vocab_size)
+            top_scores, top_indices = cumulative.topk(beam_size, dim=-1)
+            source_beam = top_indices // vocab_size
+            next_token = top_indices % vocab_size
+
+            # Gather the parent sequences from the selected source beams
+            # and append the new tokens.
+            decoded = decoded.view(batch_size, beam_size, -1)
+            decoded = decoded.gather(
+                1, source_beam.unsqueeze(-1).expand(-1, -1, decoded.size(-1))
+            )
+            decoded = torch.cat([decoded, next_token.unsqueeze(-1)], dim=-1)
+            decoded = decoded.view(batch_size * beam_size, -1)
+
+            # A beam is finished if it just emitted EOS.
+            newly_finished = next_token.eq(eos_idx)  # (batch, beam)
+            finished = finished.view(batch_size, beam_size).gather(
+                1, source_beam
+            ) | newly_finished
+            finished = finished.view(batch_size * beam_size)
+
+            beam_scores = top_scores.view(-1)
+
+            if finished.view(batch_size, beam_size).all():
+                break
+
+        # Final selection: best beam per batch, optionally length-penalised.
+        final_scores = beam_scores.view(batch_size, beam_size).clone()
+        if length_penalty_alpha > 0:
+            seq_lens = decoded.view(batch_size, beam_size, -1).ne(
+                config.PAD_IDX
+            ).sum(dim=-1).float()
+            lp = ((5.0 + seq_lens) ** length_penalty_alpha) / (
+                (5.0 + 1.0) ** length_penalty_alpha
+            )
+            final_scores = final_scores / lp
+        best_beam = final_scores.argmax(dim=-1)
+
+        decoded = decoded.view(batch_size, beam_size, -1)
+        best = decoded.gather(
+            1, best_beam.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, decoded.size(-1))
+        ).squeeze(1)
+
+        return best

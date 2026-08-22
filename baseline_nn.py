@@ -172,3 +172,91 @@ class BaselineNNTransformer(nn.Module):
             if finished.all():
                 break
         return ys
+
+    @torch.no_grad()
+    def beam_search_decode(
+        self,
+        src: torch.Tensor,
+        src_pad_mask: torch.Tensor,
+        sos_idx: int,
+        eos_idx: int,
+        max_len: int,
+        beam_size: int = 4,
+        length_penalty_alpha: float = 0.6,
+        repetition_penalty: float = 1.0,
+    ) -> torch.Tensor:
+        """Batched beam search. Mirrors model.Transformer.beam_search_decode."""
+        device = src.device
+        B, src_len = src.shape
+        vocab_size = self.fc_out.out_features
+
+        memory = self.encode(src.to(device), src_pad_mask=src_pad_mask.to(device))
+        memory_expanded = memory.unsqueeze(1).expand(
+            B, beam_size, src_len, memory.size(-1)
+        ).reshape(B * beam_size, src_len, memory.size(-1))
+        src_pad_mask_expanded = src_pad_mask.to(device).unsqueeze(1).expand(
+            B, beam_size, src_len
+        ).reshape(B * beam_size, src_len)
+
+        ys = torch.full((B * beam_size, 1), sos_idx, dtype=torch.long, device=device)
+        beam_scores = torch.zeros(B * beam_size, device=device)
+        beam_scores[beam_size::beam_size] = -1e9
+        finished = torch.zeros(B * beam_size, dtype=torch.bool, device=device)
+
+        for _ in range(max_len - 1):
+            tgt_pad = ys.eq(config.PAD_IDX)
+            logits = self.decode(
+                ys, memory_expanded,
+                tgt_pad_mask=tgt_pad,
+                memory_pad_mask=src_pad_mask_expanded,
+            )  # (B * beam, seq, vocab)
+            last_logits = logits[:, -1, :]
+
+            if repetition_penalty != 1.0:
+                score = torch.gather(last_logits, 1, ys)
+                score = torch.where(
+                    score < 0,
+                    score * repetition_penalty,
+                    score / repetition_penalty,
+                )
+                last_logits.scatter_(1, ys, score)
+
+            log_probs = torch.log_softmax(last_logits, dim=-1)
+
+            if finished.any():
+                log_probs = log_probs.masked_fill(finished.unsqueeze(-1), -1e9)
+                log_probs[finished, config.PAD_IDX] = 0.0
+
+            cumulative = log_probs + beam_scores.unsqueeze(-1)
+            cumulative = cumulative.view(B, beam_size * vocab_size)
+            top_scores, top_indices = cumulative.topk(beam_size, dim=-1)
+            source_beam = top_indices // vocab_size
+            next_token = top_indices % vocab_size
+
+            ys = ys.view(B, beam_size, -1)
+            ys = ys.gather(1, source_beam.unsqueeze(-1).expand(-1, -1, ys.size(-1)))
+            ys = torch.cat([ys, next_token.unsqueeze(-1)], dim=-1)
+            ys = ys.view(B * beam_size, -1)
+
+            newly_finished = next_token.eq(eos_idx)
+            finished = finished.view(B, beam_size).gather(1, source_beam) | newly_finished
+            finished = finished.view(B * beam_size)
+
+            beam_scores = top_scores.view(-1)
+            if finished.view(B, beam_size).all():
+                break
+
+        final_scores = beam_scores.view(B, beam_size).clone()
+        if length_penalty_alpha > 0:
+            seq_lens = ys.view(B, beam_size, -1).ne(config.PAD_IDX).sum(dim=-1).float()
+            lp = ((5.0 + seq_lens) ** length_penalty_alpha) / (
+                (5.0 + 1.0) ** length_penalty_alpha
+            )
+            final_scores = final_scores / lp
+        best_beam = final_scores.argmax(dim=-1)
+
+        ys = ys.view(B, beam_size, -1)
+        best = ys.gather(
+            1, best_beam.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, ys.size(-1))
+        ).squeeze(1)
+        return best

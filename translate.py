@@ -39,6 +39,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--repetition-penalty", type=float, default=1.0,
                    help="Penalty for already-generated tokens (HuggingFace convention). "
                         "1.0 disables; 1.1-1.3 typically breaks repetition loops on short inputs.")
+    p.add_argument("--beam-size", type=int, default=1,
+                   help="Beam size for decoding. 1 = greedy. Beam search explores "
+                        "multiple hypotheses in parallel and usually improves quality "
+                        "for short inputs; it is ~beam_size times slower than greedy.")
+    p.add_argument("--length-penalty", type=float, default=0.6,
+                   help="Wu et al. (2016) length-penalty exponent applied at final "
+                        "beam selection. 0 disables. Ignored when --beam-size 1.")
     return p.parse_args()
 
 
@@ -112,10 +119,20 @@ def translate_batch(
     eos_idx: int,
     max_len: int,
     repetition_penalty: float = 1.0,
+    beam_size: int = 1,
+    length_penalty_alpha: float = 0.6,
 ) -> torch.Tensor:
-    return model.greedy_decode(
+    if beam_size <= 1:
+        return model.greedy_decode(
+            src, src_pad_mask,
+            sos_idx=sos_idx, eos_idx=eos_idx, max_len=max_len,
+            repetition_penalty=repetition_penalty,
+        )
+    return model.beam_search_decode(
         src, src_pad_mask,
         sos_idx=sos_idx, eos_idx=eos_idx, max_len=max_len,
+        beam_size=beam_size,
+        length_penalty_alpha=length_penalty_alpha,
         repetition_penalty=repetition_penalty,
     )
 
@@ -179,6 +196,8 @@ def main() -> int:
                 model, src, src_pad_mask,
                 sos_idx=sos_idx, eos_idx=eos_idx, max_len=args.max_len,
                 repetition_penalty=args.repetition_penalty,
+                beam_size=args.beam_size,
+                length_penalty_alpha=args.length_penalty,
             )
             for i in range(ids.size(0)):
                 translation = tgt_vocab.decode(ids[i].tolist(), skip_specials=True)
