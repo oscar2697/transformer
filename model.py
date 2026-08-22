@@ -334,8 +334,16 @@ class Transformer(nn.Module):
         sos_idx: int,
         eos_idx: int,
         max_len: int,
+        repetition_penalty: float = 1.0,
     ) -> torch.Tensor:
-        """Greedy autoregressive decoding. Returns (batch, decoded_len)."""
+        """Greedy autoregressive decoding. Returns (batch, decoded_len).
+
+        `repetition_penalty` follows the HuggingFace convention: logits of
+        already-generated tokens are divided by the penalty if positive and
+        multiplied by it if negative, breaking the repetition loops that
+        greedy decoding can fall into for out-of-distribution or very short
+        inputs. 1.0 disables it; typical useful values are 1.1--1.3.
+        """
         self.eval()
         batch_size, _ = src.shape
         device = src.device
@@ -368,6 +376,17 @@ class Transformer(nn.Module):
                 )
 
             logits = self.fc_out(output[:, -1, :])  # (batch, vocab)
+
+            # Repetition penalty (HuggingFace convention).
+            if repetition_penalty != 1.0:
+                score = torch.gather(logits, 1, decoded)
+                score = torch.where(
+                    score < 0,
+                    score * repetition_penalty,
+                    score / repetition_penalty,
+                )
+                logits.scatter_(1, decoded, score)
+
             next_token = logits.argmax(dim=-1, keepdim=True)  # (batch, 1)
 
             # If a sequence already produced EOS, force PAD to keep batches aligned.

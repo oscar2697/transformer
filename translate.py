@@ -36,6 +36,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=config.SEED)
     p.add_argument("--print-source", action="store_true", help="Also print the source")
     p.add_argument("--batch-size", type=int, default=32)
+    p.add_argument("--repetition-penalty", type=float, default=1.0,
+                   help="Penalty for already-generated tokens (HuggingFace convention). "
+                        "1.0 disables; 1.1-1.3 typically breaks repetition loops on short inputs.")
     return p.parse_args()
 
 
@@ -108,8 +111,13 @@ def translate_batch(
     sos_idx: int,
     eos_idx: int,
     max_len: int,
+    repetition_penalty: float = 1.0,
 ) -> torch.Tensor:
-    return model.greedy_decode(src, src_pad_mask, sos_idx=sos_idx, eos_idx=eos_idx, max_len=max_len)
+    return model.greedy_decode(
+        src, src_pad_mask,
+        sos_idx=sos_idx, eos_idx=eos_idx, max_len=max_len,
+        repetition_penalty=repetition_penalty,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +178,7 @@ def main() -> int:
             ids = translate_batch(
                 model, src, src_pad_mask,
                 sos_idx=sos_idx, eos_idx=eos_idx, max_len=args.max_len,
+                repetition_penalty=args.repetition_penalty,
             )
             for i in range(ids.size(0)):
                 translation = tgt_vocab.decode(ids[i].tolist(), skip_specials=True)

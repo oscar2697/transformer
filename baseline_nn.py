@@ -141,8 +141,13 @@ class BaselineNNTransformer(nn.Module):
         sos_idx: int,
         eos_idx: int,
         max_len: int,
+        repetition_penalty: float = 1.0,
     ) -> torch.Tensor:
-        """Greedy autoregressive decoding. Mirrors model.Transformer.greedy_decode."""
+        """Greedy autoregressive decoding. Mirrors model.Transformer.greedy_decode.
+
+        `repetition_penalty` follows the HuggingFace convention (see
+        ``model.Transformer.greedy_decode``).
+        """
         device = src.device
         B = src.size(0)
         memory = self.encode(src.to(device), src_pad_mask=src_pad_mask.to(device))
@@ -151,6 +156,15 @@ class BaselineNNTransformer(nn.Module):
         for _ in range(max_len - 1):
             tgt_pad = ys.eq(config.PAD_IDX)
             logits = self.decode(ys, memory, tgt_pad_mask=tgt_pad, memory_pad_mask=src_pad_mask.to(device))
+            # Repetition penalty (HuggingFace convention).
+            if repetition_penalty != 1.0:
+                score = torch.gather(logits[:, -1, :], 1, ys)
+                score = torch.where(
+                    score < 0,
+                    score * repetition_penalty,
+                    score / repetition_penalty,
+                )
+                logits[:, -1, :].scatter_(1, ys, score)
             next_token = logits[:, -1, :].argmax(dim=-1, keepdim=True)
             next_token = torch.where(finished.unsqueeze(1), torch.full_like(next_token, config.PAD_IDX), next_token)
             ys = torch.cat([ys, next_token], dim=1)
