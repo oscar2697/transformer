@@ -37,6 +37,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", default=None)
     p.add_argument("--seed", type=int, default=config.SEED)
     p.add_argument("--out-json", default=None, help="Optional path to write the score JSON")
+    p.add_argument("--beam-size", type=int, default=1,
+                   help="Beam size for decoding. 1 = greedy.")
+    p.add_argument("--length-penalty", type=float, default=0.6,
+                   help="Wu-style length penalty applied at final beam selection "
+                        "(ignored when --beam-size 1).")
     return p.parse_args()
 
 
@@ -76,6 +81,8 @@ def main() -> int:
             ids = translate_batch(
                 model, src.to(device), src_pad_mask.to(device),
                 sos_idx=sos_idx, eos_idx=eos_idx, max_len=args.max_len,
+                beam_size=args.beam_size,
+                length_penalty_alpha=args.length_penalty,
             )
 
             # Decode predictions and gold targets back to strings.
