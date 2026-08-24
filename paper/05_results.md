@@ -11,11 +11,11 @@ Table 2 reports the translation quality on the Tatoeba EN→DE test set (3,312 p
 | **Hand-rolled + BPE 8 k (Pre-LN)** | **25** | **2.2288** | **9.29** | **44.00** | **62.41** | ≈ **13.5 M** |
 | | | | | *45.30 (beam=4)* | *63.37* | |
 
-*Table 2: Results on the Tatoeba EN→DE test set (n=3,312). The hand-rolled + BPE (Pre-LN) row is the strongest: greedy BLEU 44.00 (71.3/48.9/37.3/29.3, BP 0.995), beam=4 45.30 (72.4/50.7/39.0/30.9, BP 0.987). The 5.7-point gain over the baseline isolates the benefit of the corrected Pre-LN implementation.*
+*Table 2: Results on the Tatoeba EN→DE test set (n=3,312). The first row is the word-level Post-LN diagnostic/control run (BLEU = 0.38, BP = 0.593), not a competitive configuration. The hand-rolled + BPE (Pre-LN) row is the strongest: greedy BLEU 44.00 (71.3/48.9/37.3/29.3, BP 0.995), beam=4 45.30 (72.4/50.7/39.0/30.9, BP 0.987). The baseline differs from the hand-rolled run in batch size (32 vs 64) and warmup (2,000 vs 4,000), so the 5.7-point greedy gap is attributable to the combination of implementation and training schedule rather than to the implementation alone; a fully matched-hyperparameter comparison is left as future work (Section 6.7).*
 
 The best checkpoint (`checkpoints/best.pt`, Pre-LN, `val_loss=2.2288` at epoch 22, `val_ppl=9.29`) is selected by lowest validation loss on a 3,312-pair split; test set is held out for final BLEU/chrF2.
 
-The hand-rolled + BPE (Pre-LN) surpasses the baseline by 5.7 BLEU greedy (7.0 with beam), confirming that the from-scratch pipeline, once stabilised, is state-of-the-art for this compact regime.
+The hand-rolled + BPE (Pre-LN) surpasses the baseline by 5.7 BLEU greedy (7.0 with beam). Because the two runs differ in batch size and warmup, this margin is attributable to the combination of implementation and training schedule (Section 6.7), indicating that the pipeline is sound and competitive with published results on this corpus scale.
 
 ## 5.2 Training Dynamics
 
@@ -29,7 +29,7 @@ The Pre-LN model converges steadily: train loss 4.56 → 2.14, val loss 3.31 →
 
 ## 5.3 Sample Translations
 
-Table 3 presents six example translations from the held-out test set produced by the main configuration. The model outputs illustrate the symptoms of sub-training (Section 7.1): a strong bias toward a small set of high-frequency tokens, repetition across unrelated inputs, and hypotheses that are systematically shorter than the references.
+Table 3 presents six example translations produced by the **word-level Post-LN diagnostic control run** (8 epochs) on out-of-domain English sentences. The outputs illustrate the symptoms of sub-training analyzed in Section 7.1: a strong bias toward a small set of high-frequency tokens, repetition across unrelated inputs, and hypotheses that are systematically shorter than the references. The final Pre-LN + BPE checkpoint does not exhibit this collapse: its BLEU of 44.00 with brevity penalty 0.995 indicates hypotheses of reference-like length and content across the test set.
 
 | English (source) | Model translation |
 |---|---|
@@ -40,15 +40,15 @@ Table 3 presents six example translations from the held-out test set produced by
 | Thank you very much. | sie sind sehr groß . |
 | She is reading a book. | sie sind sehr groß . |
 
-*Table 3: Source–model-translation pairs from out-of-domain English sentences. The model collapses to three recurring hypotheses (`hast du das ?`, `sie sind sehr groß .`, `ich habe mich gesehen .`) regardless of input, which is the characteristic failure mode of an under-trained encoder-decoder that has not yet learned to condition its output on the source.*
+*Table 3: Source–model-translation pairs from out-of-domain English sentences, produced by the word-level Post-LN diagnostic control run (8 epochs). The model collapses to three recurring hypotheses (`hast du das ?`, `sie sind sehr groß .`, `ich habe mich gesehen .`) regardless of input, which is the characteristic failure mode of an under-trained encoder-decoder that has not yet learned to condition its output on the source. These samples motivated the corrections adopted by the final configuration (Sections 3.3 and 4.3).*
 
 The corresponding attention visualizations for these sentences (and three additional test-set examples) are shown in Figure 2.
 
 ## 5.4 Comparison with Related Work
 
-The Multi30k and Tatoeba datasets have been used extensively in prior work. WMT-scale Transformer models trained on the full WMT14 EN→DE corpus (approximately 4.5 million sentence pairs) typically achieve BLEU scores in the 27–28 range on the test set (Vaswani et al., 2017). Our model, trained on only ~324k sentence pairs at the word level without subword tokenization, operates under substantially different conditions. Word-level tokenization on a medium-sized corpus is known to suffer from severe vocabulary fragmentation and out-of-vocabulary issues, particularly for German, which has productive morphology.
+The Multi30k and Tatoeba datasets have been used extensively in prior work. WMT-scale Transformer models trained on the full WMT14 EN→DE corpus (approximately 4.5 million sentence pairs) typically achieve BLEU scores in the 27–28 range on the test set (Vaswani et al., 2017). Our model, trained on only ~324k sentence pairs, operates under substantially different conditions. Word-level tokenization on a medium-sized corpus is known to suffer from severe vocabulary fragmentation and out-of-vocabulary issues, particularly for German, which has productive morphology; the final configuration therefore adopts subword tokenization precisely to mitigate this effect.
 
-The planned baseline comparison against PyTorch's `nn.Transformer` will enable a direct assessment of the accuracy penalty, if any, introduced by our hand-rolled implementation. Any difference in BLEU/chrF2 between the two implementations, when trained with identical hyperparameters and seeds, would be attributable solely to implementation details such as attention masking conventions or gradient flow in layer normalization.
+Section 6.7 reports the completed comparison against PyTorch's `nn.Transformer`: the baseline reaches BLEU 38.30 / chrF2 56.95 versus 44.00 / 62.41 for the hand-rolled Pre-LN configuration, under a shared architecture, data pipeline, and seed. Because the two runs differ in batch size and warmup (Section 4.4), the margin is attributable to the combination of implementation details and training schedule rather than to the implementation alone; a fully matched-hyperparameter re-run is identified as future work.
 
 ## 5.5 Attention Interpretability
 
@@ -75,11 +75,11 @@ Figure 2 visualizes attention on the first four sentences of the deterministic T
 
 The four source–target pairs comprise six content tokens each (the punctuation marks are tokenised as individual units). This length was enforced by the `--min-len 6` filter introduced in `visualize_attention.py` precisely so that the attention matrices would possess sufficient internal structure to admit head-level specialisation, rather than collapsing into the degenerate diagonal patterns that arise with monosemic inputs. For this regime we observe:
 
-- **Encoder self-attention** (column 1 of each panel). The mass remains concentrated on the diagonal and on the first token (an attention-sink pattern, consistent with prior work on short inputs; Xiao et al., 2024). Because the encoder has not yet learned long-range composition (see Section 7.1), off-diagonal mass is sparse, yet the diagonal is well-defined and the sink pattern is more spatially localised than it was for the one- or two-token sequences of the earlier diagnostic, which suggests that the encoder is beginning to differentiate tokens beyond the anchor.
+- **Encoder self-attention** (column 1 of each panel). The mass remains concentrated on the diagonal and on the first token (an attention-sink pattern, consistent with prior work on short inputs; Xiao et al., 2024). Off-diagonal mass is sparse on these short inputs, but the diagonal is well-defined and the sink pattern is spatially localised—a contrast with the one- or two-token sequences of the word-level diagnostic, which suggests that the encoder differentiates tokens beyond the anchor.
 
 - **Decoder self-attention** (column 2 of each panel). Strictly lower-triangular, exactly as expected from the causal mask. The diagonal dominates on these short sentences. This remains a useful *correctness check* on the hand-rolled implementation: any masking bug would surface as non-zero mass above the diagonal, and we see none.
 
-- **Decoder cross-attention** (column 3 of each panel). This is where the sub-training is most visible. On S2 (`I ca n't draw .` → `Ich kann nicht zeichnen .`), cross-attention is *diffuse* across the source rather than peaking on the content token `draw`; on S4 (`I 'm worn out .` → `Ich bin völlig erschöpft .`), the model distributes mass approximately uniformly across the English tokens. This is consistent with the failure mode observed in Section 5.3: the decoder has not yet learned to condition its output on the source strongly enough to recover the reference translation. The cross-attention map is therefore a *diagnostic* of sub-training as much as a tool for interpretability.
+- **Decoder cross-attention** (column 3 of each panel). Cross-attention is the clearest marker distinguishing the two checkpoints. In the *word-level Post-LN diagnostic* (val_ppl 149.84), cross-attention was *diffuse*: on S2 (`I ca n't draw .` → `Ich kann nicht zeichnen .`) mass spread across the source rather than peaking on the content token `draw`, and on S4 (`I 'm worn out .` → `Ich bin völlig erschöpft .`) it was distributed approximately uniformly across the English tokens—consistent with the failure mode of Section 5.3, where the decoder had not learned to condition its output on the source. In the *final Pre-LN + BPE checkpoint* (val_ppl 9.29), cross-attention instead exhibits sharp peaks aligned with the generated tokens: when generating `zeichnen`, mass concentrates on `draw` (see Figure 3). The diffuse maps of the control run are therefore best read as a *diagnostic of sub-training*, whereas the peaked maps of the final checkpoint support its interpretability value.
 
 ### 5.5.3 Limitations of the Visualization
 

@@ -62,11 +62,11 @@ Each encoder layer wraps a \texttt{MultiHeadAttention} sub-layer and a \texttt{P
 
 \subsubsection{Full Transformer}
 
-The \texttt{Transformer} module assembles the encoder and decoder stacks with shared embedding layers (configurable, disabled by default), positional encodings, and a final linear projection head over the target vocabulary. We adopt the \textbf{post-layer-normalization} convention: layer normalization is applied after the residual addition, matching the original Vaswani et al. (2017) architecture.
+The \texttt{Transformer} module assembles the encoder and decoder stacks with shared embedding layers (configurable, disabled by default), positional encodings, and a final linear projection head over the target vocabulary. Both layer-normalization conventions are supported: the initial word-level diagnostic run used \textbf{post-layer normalization} (matching the original Vaswani et al., 2017 architecture), whereas the final configuration adopts \textbf{pre-layer normalization} (\texttt{norm\_first=True}), with a final layer norm applied to the encoder and decoder outputs. The stability motivation for this choice is analyzed in Sections~5.1 and~6.4.
 
 \subsection{Training Details}
 
-The model is trained with the Adam optimizer ($\beta_1 = 0.9$, $\beta_2 = 0.98$, $\epsilon = 10^{-9}$), a Noam learning rate scheduler with 2000 warmup steps followed by inverse-square-root decay, and gradient clipping at a maximum norm of 1.0. Label smoothing is configurable via \texttt{LABEL\_SMOOTHING} and was set to 0.1 for the main run reported in this paper. No weight tying is used in the default configuration. Table~\ref{tab:hparams} summarizes the hyperparameters of the main run.
+The model is trained with the Adam optimizer ($\beta_1 = 0.9$, $\beta_2 = 0.98$, $\epsilon = 10^{-9}$), a Noam learning rate schedule, and gradient clipping at a maximum norm of 1.0. Label smoothing is configurable via \texttt{LABEL\_SMOOTHING} and was set to 0.1 for all reported runs. No weight tying is used in the default configuration. The final main run uses 4{,}000 warmup steps and an effective batch size of 64; the earlier word-level diagnostic run used 2{,}000 warmup steps and a batch size of 32 (Section~5.1). Table~\ref{tab:hparams} summarizes the hyperparameters and results of the main run.
 
 \begin{table}[h]
 \centering
@@ -74,6 +74,9 @@ The model is trained with the Adam optimizer ($\beta_1 = 0.9$, $\beta_2 = 0.98$,
 \toprule
 \textbf{Parameter} & \textbf{Value} \\
 \midrule
+Task / direction & Tatoeba EN$\rightarrow$DE \\
+Tokenization & SentencePiece BPE, 8k pieces per language \\
+Layer norm convention & Pre-LN (\texttt{norm\_first=True}) \\
 $d_{\text{model}}$ & 256 \\
 $d_{\text{ff}}$ & 1024 \\
 Attention heads ($h$) & 8 \\
@@ -81,25 +84,27 @@ Encoder layers ($N$) & 4 \\
 Decoder layers ($M$) & 4 \\
 Dropout & 0.1 \\
 Label smoothing $\epsilon$ & 0.1 \\
-Warmup steps & 2000 \\
-Batch size & 32 \\
+Warmup steps & 4000 \\
+Batch size & 64 \\
 Max sequence length & 100 \\
-Epochs trained & 15 \\
+Epochs trained & 25 \\
 Optimizer & Adam ($\beta_1=0.9$, $\beta_2=0.98$) \\
+LR schedule & Noam \\
 Gradient clip & $\lVert g \rVert \leq 1.0$ \\
 Random seed & 42 \\
-Total parameters & $\approx$ 12.4 M \\
-Training device & CPU (no CUDA available) \\
-Training time & $\approx$ 8 h 55 min \\
-Best epoch (val\_loss) & epoch 10 \\
-Best val\_loss & 3.4736 \\
-Best val\_ppl & 32.25 \\
-BLEU (test) & 14.91 \\
-chrF2 (test) & 32.47 \\
-Test set size ($n$) & 992 \\
+Total parameters & $\approx$ 13.5 M \\
+Training device & Google Colab GPU (NVIDIA T4) \\
+Training time & $\approx$ 2.5 h \\
+Best epoch (val\_loss) & epoch 22 of 25 \\
+Best val\_loss & 2.2288 \\
+Best val\_ppl & 9.29 \\
+BLEU (test, greedy) & 44.00 (71.3/48.9/37.3/29.3, BP = 0.995) \\
+BLEU (test, beam = 4) & 45.30 (72.4/50.7/39.0/30.9, BP = 0.987) \\
+chrF2 (test, greedy / beam) & 62.41 / 63.37 \\
+Test set size ($n$) & 3,312 \\
 \bottomrule
 \end{tabular}
-\caption{Hyperparameters and final results for the main run. Validation perplexity is computed as $\exp(\text{val\_loss})$. BLEU and chrF2 are corpus-level scores on the Multi30k DE$\rightarrow$EN test set, computed with sacrebleu (see Section~4.2).}
+\caption{Hyperparameters and final results for the main run: hand-rolled Transformer + SentencePiece BPE (Pre-LN). Validation perplexity is computed as $\exp(\text{val\_loss})$. BLEU and chrF2 are corpus-level sacrebleu scores on the Tatoeba EN$\rightarrow$DE test set, computed with sacrebleu (see Section~4.2); the final epoch (25) reached val\_loss $=$ 2.2393 (val\_ppl 9.39). The word-level Post-LN diagnostic run referenced throughout the paper used batch 32, warmup 2000, and 8 epochs (Section~4.3).}
 \label{tab:hparams}
 \end{table}
 
@@ -123,7 +128,7 @@ The dataset is downloaded automatically from the official Tatoeba mirror at \url
 
 \begin{itemize}
 \item \textbf{\texttt{"word"} (default)} --- a vocabulary is built from the training split with a minimum frequency threshold of 2; tokens below this threshold are mapped to the UNK token. For the Tatoeba EN$\rightarrow$DE corpus this yields 12,843 English and 23,568 German tokens.
-\item \textbf{\texttt{"bpe"} (Opci\'on C)} --- SentencePiece byte-pair encoding (Kudo \& Richardson, 2018) is trained on the source and target training splits separately, with a fixed vocab size of 8,000 subwords per side. The 4 special tokens (\texttt{<unk>}, \texttt{<pad>}, \texttt{<sos>}, \texttt{<eos>}) keep the same indices as in the word-level pipeline (\texttt{UNK=0}, \texttt{PAD=1}, \texttt{SOS=2}, \texttt{EOS=3}), so \texttt{model.py}, \texttt{train.py}, \texttt{evaluate.py}, and \texttt{translate.py} need no changes when switching modes.
+\item \textbf{\texttt{"bpe"}} --- SentencePiece byte-pair encoding (Kudo \& Richardson, 2018; used by the final main run) is trained on the source and target training splits separately, with a fixed vocab size of 8,000 subwords per side. The 4 special tokens (\texttt{<unk>}, \texttt{<pad>}, \texttt{<sos>}, \texttt{<eos>}) keep the same indices as in the word-level pipeline (\texttt{UNK=0}, \texttt{PAD=1}, \texttt{SOS=2}, \texttt{EOS=3}), so \texttt{model.py}, \texttt{train.py}, \texttt{evaluate.py}, and \texttt{translate.py} need no changes when switching modes.
 \end{itemize}
 
 Sentences are bucketed by length to minimize padding overhead within each batch. Dynamic padding is applied per batch, with a padding token index of 1 (\texttt{PAD\_IDX}). The maximum sequence length is 100 tokens.
@@ -132,6 +137,6 @@ Sentences are bucketed by length to minimize padding overhead within each batch.
 
 \subsection{Baseline Module: \texttt{nn.Transformer}}
 
-For fair comparison with PyTorch's optimized implementation (Opci\'on B, Section~6.7), we provide a baseline wrapper around \texttt{torch.nn.Transformer} in \texttt{baseline\_nn.py}. The wrapper exposes the same interface as the hand-rolled model (\texttt{forward}, \texttt{greedy\_decode}, \texttt{count\_parameters}) and uses the same \texttt{return\_attention}-style contract where possible (PyTorch's \texttt{nn.Transformer} does not return attention weights by default; we therefore do not include the hand-rolled interpretability analysis for the baseline).
+For fair comparison with PyTorch's optimized implementation (Section~6.7), we provide a baseline wrapper around \texttt{torch.nn.Transformer} in \texttt{baseline\_nn.py}. The wrapper exposes the same interface as the hand-rolled model (\texttt{forward}, \texttt{greedy\_decode}, \texttt{count\_parameters}) and uses the same \texttt{return\_attention}-style contract where possible (PyTorch's \texttt{nn.Transformer} does not return attention weights by default; we therefore do not include the hand-rolled interpretability analysis for the baseline).
 
-The baseline uses \texttt{nn.Transformer(batch\_first=True, norm\_first=True)}---that is, \textbf{pre-LayerNorm} (post-LN is the original Vaswani et al., 2017 convention used by our hand-rolled model; pre-LN is the modern convention used in fairseq and most post-2018 Transformer implementations). This difference is documented as a separate ablation in Section~6.4. Trained under otherwise identical hyperparameters (\texttt{d\_model}, \texttt{num\_heads}, \texttt{num\_layers}, \texttt{d\_ff}, \texttt{dropout}, \texttt{warmup}, \texttt{batch size}, \texttt{label smoothing}, \texttt{seed}), the BLEU gap between the two implementations is attributable to either (a) the LN convention, or (b) subtle numerical differences (mask convention, dropout ordering, attention scaling).
+The baseline uses \texttt{nn.Transformer(batch\_first=True, norm\_first=True)}---that is, \textbf{pre-LayerNorm}, matching the LN convention of the final hand-rolled configuration (post-LN is the original Vaswani et al., 2017 convention used by the initial word-level diagnostic run). Both implementations expose the LN convention as a configurable option, and Section~6.4 discusses the stability difference between them. The two implementations share the architecture, BPE data pipeline, and seed; their training schedules differ (Section~6.7), so any BLEU gap between them is attributable to the combination of implementation details (mask convention, dropout ordering, attention scaling) and schedule differences rather than to the implementation alone.
