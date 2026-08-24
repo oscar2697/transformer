@@ -6,7 +6,7 @@ Table~\ref{tab:results} reports the translation quality on the Tatoeba EN$\right
 
 \begin{table}[h]
 \centering
-\small
+\resizebox{\textwidth}{!}{%
 \begin{tabular}{lcccccc}
 \toprule
 \textbf{Configuration} & \textbf{Epochs} & \textbf{val\_loss} & \textbf{val\_ppl} & \textbf{BLEU (test)} & \textbf{chrF2 (test)} & \textbf{Params} \\
@@ -16,7 +16,8 @@ Baseline (\texttt{nn.Transformer}) + BPE 8k (Pre-LN) & 25 & 2.5171 & 12.39 & 38.
 \textbf{Hand-rolled + BPE 8k (Pre-LN)} & \textbf{25} & \textbf{2.2288} & \textbf{9.29} & \textbf{44.00} & \textbf{62.41} & $\approx$ \textbf{13.5 M} \\
  & & & & \textit{45.30} \scriptsize{(beam=4)} & \textit{63.37} & \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \caption{Results on the Tatoeba EN$\rightarrow$DE test set ($n = 3{,}312$). BLEU and chrF2 are corpus-level sacrebleu scores. The baseline row reproduces the word-level diagnostic (BLEU = 0.38, BP = 0.593). The hand-rolled + BPE (Pre-LN) row is the strongest configuration tested: greedy BLEU = 44.00 (71.3/48.9/37.3/29.3, BP = 0.995) and beam=4 BLEU = 45.30 (72.4/50.7/39.0/30.9, BP = 0.987). The 5.7-point gain over the baseline isolates the benefit of the from-scratch Pre-LN implementation when both use identical data and tokenisation.}
 \label{tab:results}
 \end{table}
