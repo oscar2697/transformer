@@ -136,13 +136,17 @@ class PositionalEncoding(nn.Module):
 
 
 class EncoderLayer(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1) -> None:
+    def __init__(
+        self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1,
+        norm_first: bool = False,
+    ) -> None:
         super().__init__()
         self.self_attn = MultiHeadAttention(d_model, num_heads, dropout)
         self.ff = PositionwiseFeedForward(d_model, d_ff, dropout)
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
+        self.norm_first = norm_first
 
     def forward(
         self,
@@ -151,22 +155,37 @@ class EncoderLayer(nn.Module):
         return_attention: bool = False,
         return_per_head: bool = False,
     ):
-        attn_out, attn = self.self_attn(
-            x, x, x,
-            key_padding_mask=key_padding_mask,
-            return_attention=True,
-            return_per_head=return_per_head,
-        )
-        x = self.norm1(x + self.dropout(attn_out))
-        ff_out = self.ff(x)
-        x = self.norm2(x + self.dropout(ff_out))
+        if self.norm_first:
+            # Pre-LN: norm before sublayer, residual without norm.
+            attn_out, attn = self.self_attn(
+                self.norm1(x), self.norm1(x), self.norm1(x),
+                key_padding_mask=key_padding_mask,
+                return_attention=True,
+                return_per_head=return_per_head,
+            )
+            x = x + self.dropout(attn_out)
+            ff_out = self.ff(self.norm2(x))
+            x = x + self.dropout(ff_out)
+        else:
+            attn_out, attn = self.self_attn(
+                x, x, x,
+                key_padding_mask=key_padding_mask,
+                return_attention=True,
+                return_per_head=return_per_head,
+            )
+            x = self.norm1(x + self.dropout(attn_out))
+            ff_out = self.ff(x)
+            x = self.norm2(x + self.dropout(ff_out))
         if return_attention:
             return x, attn
         return x
 
 
 class DecoderLayer(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1) -> None:
+    def __init__(
+        self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1,
+        norm_first: bool = False,
+    ) -> None:
         super().__init__()
         self.self_attn = MultiHeadAttention(d_model, num_heads, dropout)
         self.cross_attn = MultiHeadAttention(d_model, num_heads, dropout)
@@ -175,6 +194,7 @@ class DecoderLayer(nn.Module):
         self.norm2 = nn.LayerNorm(d_model)
         self.norm3 = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
+        self.norm_first = norm_first
 
     def forward(
         self,
@@ -186,33 +206,58 @@ class DecoderLayer(nn.Module):
         return_attention: bool = False,
         return_per_head: bool = False,
     ):
-        # Masked self-attention
-        attn_out, self_attn = self.self_attn(
-            x, x, x,
-            attn_mask=tgt_mask,
-            key_padding_mask=tgt_key_padding_mask,
-            return_attention=True,
-            return_per_head=return_per_head,
-        )
-        x = self.norm1(x + self.dropout(attn_out))
-        # Cross-attention
-        attn_out, cross_attn = self.cross_attn(
-            x, memory, memory,
-            key_padding_mask=memory_key_padding_mask,
-            return_attention=True,
-            return_per_head=return_per_head,
-        )
-        x = self.norm2(x + self.dropout(attn_out))
-        # Feed-forward
-        ff_out = self.ff(x)
-        x = self.norm3(x + self.dropout(ff_out))
+        if self.norm_first:
+            # Pre-LN: norm before each sublayer.
+            attn_out, self_attn = self.self_attn(
+                self.norm1(x), self.norm1(x), self.norm1(x),
+                attn_mask=tgt_mask,
+                key_padding_mask=tgt_key_padding_mask,
+                return_attention=True,
+                return_per_head=return_per_head,
+            )
+            x = x + self.dropout(attn_out)
+            attn_out, cross_attn = self.cross_attn(
+                self.norm2(x), memory, memory,
+                key_padding_mask=memory_key_padding_mask,
+                return_attention=True,
+                return_per_head=return_per_head,
+            )
+            x = x + self.dropout(attn_out)
+            ff_out = self.ff(self.norm3(x))
+            x = x + self.dropout(ff_out)
+        else:
+            # Masked self-attention
+            attn_out, self_attn = self.self_attn(
+                x, x, x,
+                attn_mask=tgt_mask,
+                key_padding_mask=tgt_key_padding_mask,
+                return_attention=True,
+                return_per_head=return_per_head,
+            )
+            x = self.norm1(x + self.dropout(attn_out))
+            # Cross-attention
+            attn_out, cross_attn = self.cross_attn(
+                x, memory, memory,
+                key_padding_mask=memory_key_padding_mask,
+                return_attention=True,
+                return_per_head=return_per_head,
+            )
+            x = self.norm2(x + self.dropout(attn_out))
+            # Feed-forward
+            ff_out = self.ff(x)
+            x = self.norm3(x + self.dropout(ff_out))
         if return_attention:
             return x, self_attn, cross_attn
         return x
 
 
 class Transformer(nn.Module):
-    """Hand-rolled Transformer (post-LN, batch_first=True)."""
+    """Hand-rolled Transformer (batch_first=True).
+
+    Supports both Post-LN (original paper, norm_first=False) and Pre-LN
+    (modern, more stable) via the `norm_first` flag. Pre-LN matches the
+    baseline nn.Transformer when norm_first=True.
+    """
 
     def __init__(
         self,
@@ -224,9 +269,12 @@ class Transformer(nn.Module):
         d_ff: int = config.D_FF,
         dropout: float = config.DROPOUT,
         max_seq_length: int = config.MAX_SEQ_LENGTH,
+        norm_first: bool = config.NORM_FIRST,
     ) -> None:
         super().__init__()
         self.d_model = d_model
+        self.norm_first = norm_first
+        self.is_hand_rolled = True
 
         self.src_tok_emb = nn.Embedding(
             src_vocab_size, d_model, padding_idx=config.PAD_IDX
@@ -239,11 +287,18 @@ class Transformer(nn.Module):
         )
 
         self.encoder_layers = nn.ModuleList(
-            [EncoderLayer(d_model, num_heads, d_ff, dropout) for _ in range(num_layers)]
+            [EncoderLayer(d_model, num_heads, d_ff, dropout, norm_first=norm_first) for _ in range(num_layers)]
         )
         self.decoder_layers = nn.ModuleList(
-            [DecoderLayer(d_model, num_heads, d_ff, dropout) for _ in range(num_layers)]
+            [DecoderLayer(d_model, num_heads, d_ff, dropout, norm_first=norm_first) for _ in range(num_layers)]
         )
+        # Final norms for Pre-LN (identity for Post-LN keeps checkpoints compatible).
+        if norm_first:
+            self.encoder_norm = nn.LayerNorm(d_model)
+            self.decoder_norm = nn.LayerNorm(d_model)
+        else:
+            self.encoder_norm = nn.Identity()
+            self.decoder_norm = nn.Identity()
 
         # Weight tying is a common micro-optimisation (decoder embedding = output projection).
         # Disabled by default to keep the model faithful to the paper; flip TIE_EMBEDDINGS
@@ -301,6 +356,7 @@ class Transformer(nn.Module):
                 enc_attns.append(attn)
             else:
                 memory = layer(memory, key_padding_mask=src_pad_mask)
+        memory = self.encoder_norm(memory)
 
         dec_self_attns: List = []
         dec_cross_attns: List = []
@@ -324,6 +380,7 @@ class Transformer(nn.Module):
                     tgt_key_padding_mask=tgt_pad_mask,
                     memory_key_padding_mask=src_pad_mask,
                 )
+        output = self.decoder_norm(output)
 
         logits = self.fc_out(output)  # (batch, tgt_len, tgt_vocab_size)
         if return_attention:
@@ -367,6 +424,7 @@ class Transformer(nn.Module):
         memory = src_emb
         for layer in self.encoder_layers:
             memory = layer(memory, key_padding_mask=src_pad_mask)
+        memory = self.encoder_norm(memory)
 
         decoded = torch.full((batch_size, 1), sos_idx, dtype=torch.long, device=device)
         finished = torch.zeros(batch_size, dtype=torch.bool, device=device)
@@ -386,6 +444,7 @@ class Transformer(nn.Module):
                     tgt_key_padding_mask=tgt_pad_mask,
                     memory_key_padding_mask=src_pad_mask,
                 )
+            output = self.decoder_norm(output)
 
             logits = self.fc_out(output[:, -1, :])  # (batch, vocab)
 
@@ -479,6 +538,7 @@ class Transformer(nn.Module):
         memory = src_emb
         for layer in self.encoder_layers:
             memory = layer(memory, key_padding_mask=src_pad_mask)
+        memory = self.encoder_norm(memory)
 
         # Expand encoder memory and source pad mask across beam positions.
         memory_expanded = memory.unsqueeze(1).expand(
@@ -513,6 +573,7 @@ class Transformer(nn.Module):
                     tgt_key_padding_mask=tgt_pad_mask,
                     memory_key_padding_mask=src_pad_mask_expanded,
                 )
+            output = self.decoder_norm(output)
 
             logits = self.fc_out(output[:, -1, :])  # (batch * beam, vocab)
 

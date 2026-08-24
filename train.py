@@ -58,6 +58,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--resume", default=None, help="Path to checkpoint to resume from")
     p.add_argument("--baseline-nn", action="store_true",
                    help="Use PyTorch's nn.Transformer (Opción B baseline) instead of the hand-rolled model.")
+    p.add_argument("--norm-first", action="store_true", default=config.NORM_FIRST,
+                   help="Use Pre-LN (LayerNorm before each sublayer + final norm). "
+                        "Much more stable for deep stacks; the baseline uses this. "
+                        "Post-LN (default) is faithful to Vaswani et al. 2017.")
     return p.parse_args()
 
 
@@ -99,6 +103,7 @@ def _config_snapshot(args: argparse.Namespace) -> Dict:
         "clip_grad": args.clip_grad,
         "seed": args.seed,
         "model_type": "baseline_nn" if args.baseline_nn else "hand_rolled",
+        "norm_first": getattr(args, "norm_first", config.NORM_FIRST),
     }
 
 
@@ -249,6 +254,8 @@ def main() -> int:
         ModelCls = BaselineNNTransformer
     else:
         ModelCls = Transformer
+    # norm_first only applies to the hand-rolled model; the baseline is always Pre-LN.
+    extra = {"norm_first": args.norm_first} if not args.baseline_nn else {}
     model = ModelCls(
         src_vocab_size=len(src_vocab),
         tgt_vocab_size=len(tgt_vocab),
@@ -258,8 +265,10 @@ def main() -> int:
         d_ff=args.d_ff,
         dropout=args.dropout,
         max_seq_length=args.max_seq_length,
+        **extra,
     ).to(device)
-    print(f"Model parameters ({'baseline nn.Transformer' if args.baseline_nn else 'hand-rolled'}): {model.count_parameters():,}")
+    tag = "baseline nn.Transformer" if args.baseline_nn else ("hand-rolled Pre-LN" if args.norm_first else "hand-rolled Post-LN")
+    print(f"Model parameters ({tag}): {model.count_parameters():,}")
 
     # Optimizer (base lr is 1.0; the Noam scheduler returns the absolute lr).
     optimizer = torch.optim.Adam(

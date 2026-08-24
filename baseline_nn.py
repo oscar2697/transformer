@@ -57,6 +57,7 @@ class BaselineNNTransformer(nn.Module):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
+        self.is_hand_rolled = False
 
         self.src_embed = nn.Embedding(src_vocab_size, d_model, padding_idx=config.PAD_IDX)
         self.tgt_embed = nn.Embedding(tgt_vocab_size, d_model, padding_idx=config.PAD_IDX)

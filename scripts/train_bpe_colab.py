@@ -30,6 +30,7 @@ if _PROJECT_ROOT not in sys.path:
 # CRITICAL: must be set BEFORE importing config / dataset anywhere.
 import config
 config.TOKENIZER = "bpe"
+config.NORM_FIRST = True  # Pre-LN: far more stable, required for convergence on this depth
 
 # Now safe to import everything else.
 from train import main  # noqa: E402

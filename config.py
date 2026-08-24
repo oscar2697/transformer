@@ -33,6 +33,13 @@ MAX_SEQ_LENGTH = 100  # Tatoeba median is 6; p99 ~= 25
 # Saves parameters; usually neutral or slightly positive for translation.
 TIE_EMBEDDINGS = False
 
+# LayerNorm placement. False = Post-LN (original Vaswani et al., 2017,
+# faithful but less stable for deep stacks). True = Pre-LN (modern default:
+# LayerNorm before each sublayer + final norm; much more stable, the
+# baseline nn.Transformer uses this via norm_first=True). Checkpoints
+# trained with Post-LN remain loadable when this flag is False.
+NORM_FIRST = False
+
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------

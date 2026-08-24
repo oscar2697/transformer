@@ -79,6 +79,7 @@ def build_model_from_checkpoint(
         d_ff=cfg.get("d_ff", config.D_FF),
         dropout=cfg.get("dropout", config.DROPOUT),
         max_seq_length=cfg.get("max_seq_length", config.MAX_SEQ_LENGTH),
+        **({"norm_first": cfg.get("norm_first", config.NORM_FIRST)} if ModelCls == Transformer else {}),
     ).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()

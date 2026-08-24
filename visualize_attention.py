@@ -170,7 +170,7 @@ def main() -> int:
     # the hand-rolled model, which is the one we use for the §5 attention
     # analysis anyway. The baseline row of Table 5 is supported by its
     # BLEU/chrF2 numbers; attention-viz comparison is left as future work.
-    if hasattr(model, "transformer") and not hasattr(model, "encoder_layers"):
+    if not getattr(model, "is_hand_rolled", hasattr(model, "encoder_layers")):
         print(
             "This checkpoint uses the BaselineNNTransformer (nn.Transformer) "
             "wrapper, which does not expose attention weights in PyTorch >= 2.10.\n"
