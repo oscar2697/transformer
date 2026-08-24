@@ -71,7 +71,7 @@ class BaselineNNTransformer(nn.Module):
             num_decoder_layers=num_layers,
             dim_feedforward=d_ff,
             dropout=dropout,
-            activation="gelu",
+            activation="relu",
             batch_first=True,
             norm_first=True,  # Pre-LN — PyTorch's default and the modern convention.
         )
@@ -142,11 +142,14 @@ class BaselineNNTransformer(nn.Module):
         eos_idx: int,
         max_len: int,
         repetition_penalty: float = 1.0,
+        no_repeat_ngram_size: int = 0,
     ) -> torch.Tensor:
         """Greedy autoregressive decoding. Mirrors model.Transformer.greedy_decode.
 
         `repetition_penalty` follows the HuggingFace convention (see
         ``model.Transformer.greedy_decode``).
+
+        `no_repeat_ngram_size` blocks repeated n-grams (0 disables).
         """
         device = src.device
         B = src.size(0)
@@ -156,15 +159,35 @@ class BaselineNNTransformer(nn.Module):
         for _ in range(max_len - 1):
             tgt_pad = ys.eq(config.PAD_IDX)
             logits = self.decode(ys, memory, tgt_pad_mask=tgt_pad, memory_pad_mask=src_pad_mask.to(device))
-            # Repetition penalty (HuggingFace convention).
+            # Repetition penalty — exclude specials so EOS/PAD are not suppressed.
             if repetition_penalty != 1.0:
+                specials = {config.PAD_IDX, config.UNK_IDX, config.SOS_IDX, config.EOS_IDX}
+                mask = torch.ones_like(ys, dtype=torch.bool)
+                for s in specials:
+                    mask &= ys.ne(s)
                 score = torch.gather(logits[:, -1, :], 1, ys)
-                score = torch.where(
+                penalised = torch.where(
                     score < 0,
                     score * repetition_penalty,
                     score / repetition_penalty,
                 )
+                score = torch.where(mask, penalised, score)
                 logits[:, -1, :].scatter_(1, ys, score)
+            # No-repeat n-gram blocking.
+            if no_repeat_ngram_size > 0 and ys.size(1) >= no_repeat_ngram_size - 1:
+                n = no_repeat_ngram_size
+                last_logits = logits[:, -1, :]
+                for b in range(ys.size(0)):
+                    seq = ys[b].tolist()
+                    if len(seq) < n - 1:
+                        continue
+                    seen = set()
+                    for i in range(len(seq) - n + 1):
+                        seen.add(tuple(seq[i : i + n]))
+                    prefix = tuple(seq[-(n - 1) :]) if n > 1 else ()
+                    for tok in range(last_logits.size(-1)):
+                        if prefix + (tok,) in seen:
+                            last_logits[b, tok] = -1e9
             next_token = logits[:, -1, :].argmax(dim=-1, keepdim=True)
             next_token = torch.where(finished.unsqueeze(1), torch.full_like(next_token, config.PAD_IDX), next_token)
             ys = torch.cat([ys, next_token], dim=1)
@@ -184,8 +207,12 @@ class BaselineNNTransformer(nn.Module):
         beam_size: int = 4,
         length_penalty_alpha: float = 0.6,
         repetition_penalty: float = 1.0,
+        no_repeat_ngram_size: int = 0,
     ) -> torch.Tensor:
-        """Batched beam search. Mirrors model.Transformer.beam_search_decode."""
+        """Batched beam search. Mirrors model.Transformer.beam_search_decode.
+
+        `no_repeat_ngram_size` blocks repeated n-grams (0 disables).
+        """
         device = src.device
         B, src_len = src.shape
         vocab_size = self.fc_out.out_features
@@ -200,7 +227,7 @@ class BaselineNNTransformer(nn.Module):
 
         ys = torch.full((B * beam_size, 1), sos_idx, dtype=torch.long, device=device)
         beam_scores = torch.zeros(B * beam_size, device=device)
-        beam_scores[beam_size::beam_size] = -1e9
+        beam_scores.view(B, beam_size)[:, 1:] = -1e9  # every beam except the first of each group
         finished = torch.zeros(B * beam_size, dtype=torch.bool, device=device)
 
         for _ in range(max_len - 1):
@@ -213,13 +240,32 @@ class BaselineNNTransformer(nn.Module):
             last_logits = logits[:, -1, :]
 
             if repetition_penalty != 1.0:
+                specials = {config.PAD_IDX, config.UNK_IDX, config.SOS_IDX, config.EOS_IDX}
+                mask = torch.ones_like(ys, dtype=torch.bool)
+                for s in specials:
+                    mask &= ys.ne(s)
                 score = torch.gather(last_logits, 1, ys)
-                score = torch.where(
+                penalised = torch.where(
                     score < 0,
                     score * repetition_penalty,
                     score / repetition_penalty,
                 )
+                score = torch.where(mask, penalised, score)
                 last_logits.scatter_(1, ys, score)
+
+            if no_repeat_ngram_size > 0 and ys.size(1) >= no_repeat_ngram_size - 1:
+                n = no_repeat_ngram_size
+                for b in range(ys.size(0)):
+                    seq = ys[b].tolist()
+                    if len(seq) < n - 1:
+                        continue
+                    seen = set()
+                    for i in range(len(seq) - n + 1):
+                        seen.add(tuple(seq[i : i + n]))
+                    prefix = tuple(seq[-(n - 1) :]) if n > 1 else ()
+                    for tok in range(last_logits.size(-1)):
+                        if prefix + (tok,) in seen:
+                            last_logits[b, tok] = -1e9
 
             log_probs = torch.log_softmax(last_logits, dim=-1)
 

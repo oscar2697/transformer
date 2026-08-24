@@ -278,15 +278,16 @@ def main() -> int:
     # Resume
     start_epoch = 0
     best_val_loss = math.inf
+    global_step = 0
     if args.resume:
         print(f"Resuming from {args.resume}")
         ckpt = load_checkpoint(args.resume, model, optimizer, scheduler, device)
         start_epoch = ckpt.get("epoch", 0) + 1
         best_val_loss = ckpt.get("best_val_loss", math.inf)
-        print(f"  -> epoch {start_epoch}, best_val_loss {best_val_loss:.4f}")
+        global_step = ckpt.get("global_step", 0)
+        print(f"  -> epoch {start_epoch}, global_step {global_step}, best_val_loss {best_val_loss:.4f}")
 
     # Train
-    global_step = 0
     patience_counter = 0
     train_loss_meter = AverageMeter()
     overall_start = time.time()
@@ -307,7 +308,10 @@ def main() -> int:
                 model, batch, optimizer, scheduler,
                 criterion, device, args.clip_grad,
             )
-            train_loss_meter.update(loss, n=batch["tgt"].size(0))
+            # Weight by non-pad target tokens so train_loss is comparable
+            # to val_loss (both are per-token cross-entropy).
+            n_tokens = int(batch["tgt"][:, 1:].ne(config.PAD_IDX).sum().item())
+            train_loss_meter.update(loss, n=max(n_tokens, 1))
             global_step += 1
 
             if global_step % args.log_interval == 0:

@@ -109,7 +109,7 @@ class PositionwiseFeedForward(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.dropout(self.fc2(torch.relu(self.fc1(x))))
+        return self.fc2(self.dropout(torch.relu(self.fc1(x))))
 
 
 class PositionalEncoding(nn.Module):
@@ -257,9 +257,16 @@ class Transformer(nn.Module):
         self._init_parameters()
 
     def _init_parameters(self) -> None:
-        for p in self.parameters():
+        # Embeddings use a small normal init (the scale is compensated by
+        # the * sqrt(d_model) factor in forward); all other matrices keep
+        # Xavier uniform. Biases and LayerNorm params remain at their
+        # PyTorch defaults (0 / 1).
+        for name, p in self.named_parameters():
             if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
+                if "tok_emb" in name:
+                    nn.init.normal_(p, mean=0.0, std=0.02)
+                else:
+                    nn.init.xavier_uniform_(p)
 
     @staticmethod
     def generate_causal_mask(seq_len: int, device: torch.device) -> torch.Tensor:
@@ -335,6 +342,7 @@ class Transformer(nn.Module):
         eos_idx: int,
         max_len: int,
         repetition_penalty: float = 1.0,
+        no_repeat_ngram_size: int = 0,
     ) -> torch.Tensor:
         """Greedy autoregressive decoding. Returns (batch, decoded_len).
 
@@ -343,6 +351,10 @@ class Transformer(nn.Module):
         multiplied by it if negative, breaking the repetition loops that
         greedy decoding can fall into for out-of-distribution or very short
         inputs. 1.0 disables it; typical useful values are 1.1--1.3.
+
+        `no_repeat_ngram_size` blocks any n-gram that has already appeared
+        in the generated prefix (0 disables). Complements the soft
+        repetition penalty with a hard constraint.
         """
         self.eval()
         batch_size, _ = src.shape
@@ -377,15 +389,37 @@ class Transformer(nn.Module):
 
             logits = self.fc_out(output[:, -1, :])  # (batch, vocab)
 
-            # Repetition penalty (HuggingFace convention).
+            # Repetition penalty (HuggingFace convention) — exclude special
+            # tokens (PAD/SOS/EOS/UNK) so termination and padding are not
+            # suppressed.
             if repetition_penalty != 1.0:
+                specials = {config.PAD_IDX, config.UNK_IDX, config.SOS_IDX, config.EOS_IDX}
+                mask = torch.ones_like(decoded, dtype=torch.bool)
+                for s in specials:
+                    mask &= decoded.ne(s)
                 score = torch.gather(logits, 1, decoded)
-                score = torch.where(
+                penalised = torch.where(
                     score < 0,
                     score * repetition_penalty,
                     score / repetition_penalty,
                 )
+                score = torch.where(mask, penalised, score)
                 logits.scatter_(1, decoded, score)
+
+            # No-repeat n-gram blocking (hard constraint).
+            if no_repeat_ngram_size > 0 and decoded.size(1) >= no_repeat_ngram_size - 1:
+                n = no_repeat_ngram_size
+                for b in range(batch_size):
+                    seq = decoded[b].tolist()
+                    if len(seq) < n - 1:
+                        continue
+                    seen = set()
+                    for i in range(len(seq) - n + 1):
+                        seen.add(tuple(seq[i : i + n]))
+                    prefix = tuple(seq[-(n - 1) :]) if n > 1 else ()
+                    for tok in range(logits.size(-1)):
+                        if prefix + (tok,) in seen:
+                            logits[b, tok] = -1e9
 
             next_token = logits.argmax(dim=-1, keepdim=True)  # (batch, 1)
 
@@ -414,6 +448,7 @@ class Transformer(nn.Module):
         beam_size: int = 4,
         length_penalty_alpha: float = 0.6,
         repetition_penalty: float = 1.0,
+        no_repeat_ngram_size: int = 0,
     ) -> torch.Tensor:
         """Batched beam-search decoding. Returns (batch, decoded_len).
 
@@ -429,6 +464,8 @@ class Transformer(nn.Module):
 
         `repetition_penalty` applies the same HuggingFace convention as in
         `greedy_decode` (1.0 disables it).
+
+        `no_repeat_ngram_size` blocks repeated n-grams (0 disables).
         """
         self.eval()
         batch_size, src_len = src.shape
@@ -458,7 +495,7 @@ class Transformer(nn.Module):
             (batch_size * beam_size, 1), sos_idx, dtype=torch.long, device=device
         )
         beam_scores = torch.zeros(batch_size * beam_size, device=device)
-        beam_scores[beam_size::beam_size] = -1e9  # every beam except the first of each group
+        beam_scores.view(batch_size, beam_size)[:, 1:] = -1e9  # every beam except the first of each group
         finished = torch.zeros(batch_size * beam_size, dtype=torch.bool, device=device)
 
         for _ in range(max_len - 1):
@@ -480,13 +517,32 @@ class Transformer(nn.Module):
             logits = self.fc_out(output[:, -1, :])  # (batch * beam, vocab)
 
             if repetition_penalty != 1.0:
+                specials = {config.PAD_IDX, config.UNK_IDX, config.SOS_IDX, config.EOS_IDX}
+                mask = torch.ones_like(decoded, dtype=torch.bool)
+                for s in specials:
+                    mask &= decoded.ne(s)
                 score = torch.gather(logits, 1, decoded)
-                score = torch.where(
+                penalised = torch.where(
                     score < 0,
                     score * repetition_penalty,
                     score / repetition_penalty,
                 )
+                score = torch.where(mask, penalised, score)
                 logits.scatter_(1, decoded, score)
+
+            if no_repeat_ngram_size > 0 and decoded.size(1) >= no_repeat_ngram_size - 1:
+                n = no_repeat_ngram_size
+                for b in range(decoded.size(0)):
+                    seq = decoded[b].tolist()
+                    if len(seq) < n - 1:
+                        continue
+                    seen = set()
+                    for i in range(len(seq) - n + 1):
+                        seen.add(tuple(seq[i : i + n]))
+                    prefix = tuple(seq[-(n - 1) :]) if n > 1 else ()
+                    for tok in range(logits.size(-1)):
+                        if prefix + (tok,) in seen:
+                            logits[b, tok] = -1e9
 
             log_probs = torch.log_softmax(logits, dim=-1)  # (batch * beam, vocab)
 

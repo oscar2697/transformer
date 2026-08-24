@@ -271,13 +271,12 @@ class BucketBatchSampler:
     def __iter__(self):
         n = len(self.lengths)
         order = sorted(range(n), key=lambda i: self.lengths[i])
-        n_batches = n // self.batch_size
-        usable = n_batches * self.batch_size
-        order = order[:usable]
-        order = [order[i : i + self.batch_size] for i in range(0, usable, self.batch_size)]
+        batches = [order[i : i + self.batch_size] for i in range(0, n, self.batch_size)]
+        if self.drop_last and batches and len(batches[-1]) < self.batch_size:
+            batches = batches[:-1]
         if self.shuffle:
-            self._rng.shuffle(order)
-        for batch in order:
+            self._rng.shuffle(batches)
+        for batch in batches:
             yield batch
 
 
@@ -625,6 +624,72 @@ def _load_data_bpe(
         collate_fn=collate, num_workers=0,
     )
     return train_loader, val_loader, test_loader, src_vocab, tgt_vocab
+
+
+# Fast vocab-only loader for inference (translate.py / visualize_attention.py).
+# Avoids re-tokenising the full 331k-pair corpus when only the vocabularies
+# are needed. For BPE this is just an SPM model load (<1s); for word-level
+# it falls back to the full pipeline.
+def load_vocab_only(
+    data_dir: str = config.DATA_DIR,
+) -> tuple[Vocab, Vocab]:
+    """Load source and target vocabs without building DataLoaders.
+
+    In BPE mode the SPM models are cached under config.SPM_MODEL_DIR, so
+    this function returns in well under a second when the cache is warm.
+    """
+    if getattr(config, "TOKENIZER", "word") == "bpe":
+        # Fast path: if both SPM models already exist, load them directly
+        # without touching the 331k-pair corpus at all.
+        src_model = os.path.join(config.SPM_MODEL_DIR, config.SPM_SRC_PREFIX + ".model")
+        tgt_model = os.path.join(config.SPM_MODEL_DIR, config.SPM_TGT_PREFIX + ".model")
+        if os.path.exists(src_model) and os.path.exists(tgt_model):
+            spm = _ensure_spm()
+            src_sp = spm.SentencePieceProcessor()
+            src_sp.Load(src_model)
+            tgt_sp = spm.SentencePieceProcessor()
+            tgt_sp.Load(tgt_model)
+            return BpeVocab(src_sp), BpeVocab(tgt_sp)
+        # Cold start: need to train SPM — fall back to reading the corpus.
+        download_tatoeba(data_dir)
+        txt_path = os.path.join(data_dir, _TATOEBA_TXT_NAME)
+        raw_src, raw_tgt = _read_pairs(txt_path)
+        rng = random.Random(config.SEED)
+        idx = list(range(len(raw_src)))
+        rng.shuffle(idx)
+        n_test = max(1, int(0.01 * len(raw_src)))
+        n_val = max(1, int(0.01 * len(raw_src)))
+        train_idx = sorted(idx[n_test + n_val :])
+        raw_train_src = [raw_src[i] for i in train_idx]
+        raw_train_tgt = [raw_tgt[i] for i in train_idx]
+        src_sp = _train_or_load_spm(
+            raw_train_src, config.SPM_MODEL_DIR, config.SPM_SRC_PREFIX,
+            config.SPM_VOCAB_SIZE, config.SPM_CHAR_COVERAGE,
+        )
+        tgt_sp = _train_or_load_spm(
+            raw_train_tgt, config.SPM_MODEL_DIR, config.SPM_TGT_PREFIX,
+            config.SPM_VOCAB_SIZE, config.SPM_CHAR_COVERAGE,
+        )
+        return BpeVocab(src_sp), BpeVocab(tgt_sp)
+    # Word-level fallback: build vocabs from training split (still reads corpus
+    # but avoids DataLoader construction).
+    txt_path = download_tatoeba(data_dir)
+    raw_src, raw_tgt = _read_pairs(txt_path)
+    pairs: List[Tuple[List[str], List[str]]] = []
+    for en, de in zip(raw_src, raw_tgt):
+        en_tok = tokenize(en)
+        de_tok = tokenize(de)
+        if 1 <= len(en_tok) <= config.MAX_SEQ_LENGTH and 1 <= len(de_tok) <= config.MAX_SEQ_LENGTH - 2:
+            pairs.append((en_tok, de_tok))
+    rng = random.Random(config.SEED)
+    idx = list(range(len(pairs)))
+    rng.shuffle(idx)
+    n_test = max(1, int(0.01 * len(pairs)))
+    n_val = max(1, int(0.01 * len(pairs)))
+    train_idx = sorted(idx[n_test + n_val :])
+    src_vocab = Vocab.build([pairs[i][0] for i in train_idx], min_freq=config.SRC_MIN_FREQ)
+    tgt_vocab = Vocab.build([pairs[i][1] for i in train_idx], min_freq=config.TGT_MIN_FREQ)
+    return src_vocab, tgt_vocab
 
 
 # Top-level dispatcher: route to BPE or word based on config.TOKENIZER.

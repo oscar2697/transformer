@@ -15,7 +15,7 @@ from typing import List
 import torch
 
 import config
-from dataset import Vocab, BpeVocab, load_data_dispatched as load_data, tokenize
+from dataset import Vocab, BpeVocab, load_data_dispatched as load_data, load_vocab_only, tokenize
 from model import Transformer
 from utils import set_seed
 
@@ -46,6 +46,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--length-penalty", type=float, default=0.6,
                    help="Wu et al. (2016) length-penalty exponent applied at final "
                         "beam selection. 0 disables. Ignored when --beam-size 1.")
+    p.add_argument("--no-repeat-ngram-size", type=int, default=0,
+                   help="Block n-grams that have already appeared (0 disables). "
+                        "Complements --repetition-penalty with a hard constraint; "
+                        "e.g. 3 blocks repeated trigrams.")
     return p.parse_args()
 
 
@@ -121,12 +125,14 @@ def translate_batch(
     repetition_penalty: float = 1.0,
     beam_size: int = 1,
     length_penalty_alpha: float = 0.6,
+    no_repeat_ngram_size: int = 0,
 ) -> torch.Tensor:
     if beam_size <= 1:
         return model.greedy_decode(
             src, src_pad_mask,
             sos_idx=sos_idx, eos_idx=eos_idx, max_len=max_len,
             repetition_penalty=repetition_penalty,
+            no_repeat_ngram_size=no_repeat_ngram_size,
         )
     return model.beam_search_decode(
         src, src_pad_mask,
@@ -134,6 +140,7 @@ def translate_batch(
         beam_size=beam_size,
         length_penalty_alpha=length_penalty_alpha,
         repetition_penalty=repetition_penalty,
+        no_repeat_ngram_size=no_repeat_ngram_size,
     )
 
 
@@ -150,10 +157,15 @@ def main() -> int:
         else torch.device("cuda" if torch.cuda.is_available() else "cpu")
     )
 
-    # We need the vocabs. Easiest way: run load_data() — it will not re-download
-    # the dataset if the txt files are already on disk. We discard the loaders.
+    # Fast path: only the vocabs are needed for translation. load_vocab_only
+    # returns in <1s for BPE (just an SPM model load) instead of ~15s for
+    # the full corpus re-tokenisation that load_data would do.
     print("Loading vocabs ...")
-    _, _, _, src_vocab, tgt_vocab = load_data(batch_size=args.batch_size, data_dir=args.data_dir)
+    try:
+        src_vocab, tgt_vocab = load_vocab_only(data_dir=args.data_dir)
+    except Exception:
+        # Fallback to the full pipeline (e.g. word-level first run).
+        _, _, _, src_vocab, tgt_vocab = load_data(batch_size=args.batch_size, data_dir=args.data_dir)
     print(f"  src vocab: {len(src_vocab)}, tgt vocab: {len(tgt_vocab)}")
 
     model = build_model_from_checkpoint(args.checkpoint, src_vocab, tgt_vocab, device)
@@ -198,6 +210,7 @@ def main() -> int:
                 repetition_penalty=args.repetition_penalty,
                 beam_size=args.beam_size,
                 length_penalty_alpha=args.length_penalty,
+                no_repeat_ngram_size=args.no_repeat_ngram_size,
             )
             for i in range(ids.size(0)):
                 translation = tgt_vocab.decode(ids[i].tolist(), skip_specials=True)

@@ -42,6 +42,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--length-penalty", type=float, default=0.6,
                    help="Wu-style length penalty applied at final beam selection "
                         "(ignored when --beam-size 1).")
+    p.add_argument("--no-repeat-ngram-size", type=int, default=0,
+                   help="Block repeated n-grams (0 disables).")
     return p.parse_args()
 
 
@@ -83,6 +85,7 @@ def main() -> int:
                 sos_idx=sos_idx, eos_idx=eos_idx, max_len=args.max_len,
                 beam_size=args.beam_size,
                 length_penalty_alpha=args.length_penalty,
+                no_repeat_ngram_size=args.no_repeat_ngram_size,
             )
 
             # Decode predictions and gold targets back to strings.
