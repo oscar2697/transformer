@@ -23,6 +23,9 @@ checkpoints/
 .idea/
 *.swp
 
+# Paper translation (local only, not versioned)
+paper2/
+
 # OS
 .DS_Store
 Thumbs.db
