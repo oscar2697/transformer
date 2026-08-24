@@ -6,14 +6,16 @@ Table~\ref{tab:results} reports the translation quality on the Tatoeba EN$\right
 
 \begin{table}[h]
 \centering
+\footnotesize
+\setlength{\tabcolsep}{2.5pt}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lcccccc}
 \toprule
-\textbf{Configuration} & \textbf{Epochs} & \textbf{val\_loss} & \textbf{val\_ppl} & \textbf{BLEU (test)} & \textbf{chrF2 (test)} & \textbf{Params} \\
+\textbf{Configuration} & \textbf{Epochs} & \textbf{val\_loss} & \textbf{val\_ppl} & \textbf{BLEU} & \textbf{chrF2} & \textbf{Params} \\
 \midrule
-Hand-rolled + word-level (Post-LN, sub-trained) & 8 & 5.0096 & 149.84 & 0.38 & 11.28 & $\approx$ 12 M \\
-Baseline (\texttt{nn.Transformer}) + BPE 8k (Pre-LN) & 25 & 2.5171 & 12.39 & 38.30 & 56.95 & $\approx$ 13.5 M \\
-\textbf{Hand-rolled + BPE 8k (Pre-LN)} & \textbf{25} & \textbf{2.2288} & \textbf{9.29} & \textbf{44.00} & \textbf{62.41} & $\approx$ \textbf{13.5 M} \\
+Hand-rolled + word (Post-LN) & 8 & 5.0096 & 149.84 & 0.38 & 11.28 & $\approx$12\,M \\
+Baseline + BPE 8k (Pre-LN) & 25 & 2.5171 & 12.39 & 38.30 & 56.95 & $\approx$13.5\,M \\
+\textbf{Hand-rolled + BPE 8k (Pre-LN)} & \textbf{25} & \textbf{2.2288} & \textbf{9.29} & \textbf{44.00} & \textbf{62.41} & $\approx$\textbf{13.5\,M} \\
  & & & & \textit{45.30} \scriptsize{(beam=4)} & \textit{63.37} & \\
 \bottomrule
 \end{tabular}%
